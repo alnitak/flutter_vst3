@@ -2,10 +2,10 @@
 /// This runs in the SAME process/isolate as the audio processing
 library;
 
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_vst3/flutter_vst3.dart';
+import 'package:flutter_vst3/ui.dart';
 import '../src/echo_parameters.dart';
-import '../src/echo_processor.dart';
 
 
 /// Main UI screen for the Echo VST3 plugin.
@@ -23,6 +23,7 @@ class _EchoUIState extends State<EchoUI> {
   void initState() {
     super.initState();
     _binding.addListener(_onParametersChanged);
+    _binding.loadInitialParameters();
   }
   
   @override
@@ -170,22 +171,37 @@ class EchoWaveformVisualizer extends StatefulWidget {
   State<EchoWaveformVisualizer> createState() => _EchoWaveformVisualizerState();
 }
 
-class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer>
-    with SingleTickerProviderStateMixin {
-  AnimationController? _tickerController;
+class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
+  Timer? _timer;
+  Vst3AudioBufferReader? _reader;
+  List<double> _samples = const [];
 
   @override
   void initState() {
     super.initState();
-    _tickerController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 1),
-    )..repeat();
+    _initReader();
+    _timer = Timer.periodic(const Duration(milliseconds: 33), (_) => _pollWaveform());
+  }
+
+  void _initReader() async {
+    final reader = await VST3ParameterBinding.getInstance().getAudioBufferReader();
+    if (mounted) {
+      _reader = reader;
+    }
+  }
+
+  void _pollWaveform() {
+    final reader = _reader;
+    if (reader != null && mounted) {
+      setState(() {
+        _samples = reader.getLatestOutputSamples(maxCount: 256);
+      });
+    }
   }
 
   @override
   void dispose() {
-    _tickerController?.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -195,14 +211,11 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer>
       width: double.infinity,
       height: widget.height,
       color: Colors.black,
-      child: AnimatedBuilder(
-        animation: _tickerController!,
-        builder: (context, _) => CustomPaint(
-          size: Size(double.infinity, widget.height),
-          painter: _EchoWaveformPainter(
-            samples: EchoProcessor.waveformBuffer,
-            color: widget.waveColor,
-          ),
+      child: CustomPaint(
+        size: Size(double.infinity, widget.height),
+        painter: _EchoWaveformPainter(
+          samples: _samples,
+          color: widget.waveColor,
         ),
       ),
     );
@@ -235,6 +248,14 @@ class _EchoWaveformPainter extends CustomPainter {
   void _drawWave(Canvas canvas, Size size) {
     switch (samples.isEmpty) {
       case true:
+        final idlePaint = Paint()
+          ..color = color.withValues(alpha: 0.5)
+          ..strokeWidth = 1.5;
+        canvas.drawLine(
+          Offset(0, size.height / 2),
+          Offset(size.width, size.height / 2),
+          idlePaint,
+        );
         return;
       case false:
         final path = _buildPath(size);

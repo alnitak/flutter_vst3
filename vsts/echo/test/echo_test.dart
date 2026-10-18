@@ -1,7 +1,7 @@
 import 'package:test/test.dart';
-import '../lib/src/echo_processor.dart';
-import '../lib/src/echo_parameters.dart';
-import '../lib/src/echo_plugin.dart';
+import 'package:echo/src/echo_processor.dart';
+import 'package:echo/src/echo_parameters.dart';
+import 'package:echo/src/echo_plugin.dart';
 
 void main() {
   group('EchoProcessor', () {
@@ -70,6 +70,29 @@ void main() {
       processor.processStereo(input, input, output, output, parameters);
       
       expect(output.any((sample) => sample != 0.0), isTrue);
+    });
+
+    test('modulates delay time smoothly without clicks', () {
+      final processor = EchoProcessor();
+      processor.initialize(44100.0, 512);
+      final parameters = EchoParameters()
+        ..mix = 1.0
+        ..feedback = 0.5
+        ..delayTime = 0.1;
+      
+      final input = List.generate(512, (i) => (i % 32 == 0) ? 0.8 : 0.0);
+      final output = List.filled(512, 0.0);
+      processor.processStereo(input, input, output, output, parameters);
+
+      // Change delayTime sharply
+      parameters.delayTime = 0.6;
+      final output2 = List.filled(512, 0.0);
+      processor.processStereo(input, input, output2, output2, parameters);
+
+      for (var i = 1; i < output2.length; i++) {
+        final diff = (output2[i] - output2[i - 1]).abs();
+        expect(diff, lessThan(0.95));
+      }
     });
   });
 

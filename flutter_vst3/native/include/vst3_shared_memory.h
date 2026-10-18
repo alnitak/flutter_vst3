@@ -104,3 +104,20 @@ struct Vst3SharedMemory {
 };
 #pragma pack(pop)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/// Registers the active shared memory mapping for UI buffer readers.
+void vst3_set_active_shm(const char* name, struct Vst3SharedMemory* shm);
+
+/// Returns the name of the currently active POSIX/Win32 shared memory segment.
+const char* vst3_get_active_shm_name();
+
+/// Returns a direct pointer to the active Vst3SharedMemory structure in this process.
+struct Vst3SharedMemory* vst3_get_active_shm_ptr();
+
+#ifdef __cplusplus
+}
+#endif
+

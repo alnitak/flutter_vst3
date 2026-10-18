@@ -22,8 +22,18 @@ reverb-vst: reverb
 # Build reverb VST® 3 without installing (explicit build-only target)
 reverb-build-only: reverb
 
+# Build Flutter UI bundle for Echo
+echo-flutter:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "Building Flutter macOS bundle for Echo..."; \
+		cd vsts/echo && flutter build macos --debug; \
+	elif [ "$$(uname)" = "Linux" ]; then \
+		echo "Building Flutter Linux bundle for Echo..."; \
+		cd vsts/echo && flutter build linux; \
+	fi
+
 # Build the Echo VST® 3 plugin  
-echo: echo-deps
+echo: echo-deps echo-flutter
 	@echo "Building Echo VST® 3 plugin..."
 	@mkdir -p vsts/echo/build
 	@cd vsts/echo/build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
@@ -144,16 +154,20 @@ flutter-deps:
 		flutter pub get --directory=flutter_ui; \
 	fi
 
-# Install VST® 3 plugin to system location (macOS/Linux)
-install: reverb-vst
-	@echo "Installing flutter_reverb.vst3..."
+# Install VST® 3 plugins to system location (macOS/Linux)
+install: reverb-vst echo-vst
+	@echo "Installing plugins..."
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		mkdir -p ~/Library/Audio/Plug-Ins/VST3/; \
-		cp -r vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 ~/Library/Audio/Plug-Ins/VST3/; \
-		echo "✅ Installed to ~/Library/Audio/Plug-Ins/VST3/"; \
+		rm -rf ~/Library/Audio/Plug-Ins/VST3/flutter_reverb.vst3; \
+		rm -rf ~/Library/Audio/Plug-Ins/VST3/echo.vst3; \
+		cp -R vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 ~/Library/Audio/Plug-Ins/VST3/; \
+		cp -R vsts/echo/build/VST3/Release/echo.vst3 ~/Library/Audio/Plug-Ins/VST3/; \
+		echo "✅ Installed flutter_reverb.vst3 and echo.vst3 to ~/Library/Audio/Plug-Ins/VST3/"; \
 	elif [ "$$(uname)" = "Linux" ]; then \
 		mkdir -p ~/.vst3/; \
 		cp -r vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 ~/.vst3/; \
+		cp -r vsts/echo/build/VST3/Release/echo.vst3 ~/.vst3/; \
 		echo "✅ Installed to ~/.vst3/"; \
 	else \
 		echo "⚠️  Manual installation required on this platform"; \

@@ -171,8 +171,16 @@ function(add_dart_vst3_plugin target_name dart_file)
     
     # Bridge components - Platform-specific view
     set(bridge_sources_no_factory)
+    list(APPEND bridge_sources_no_factory ${BRIDGE_DIR}/src/vst3_shared_memory.cpp)
     if(SMTG_MAC)
-        list(APPEND bridge_sources_no_factory ${BRIDGE_DIR}/src/embedded_flutter_view.mm)
+        list(APPEND bridge_sources_no_factory
+            ${BRIDGE_DIR}/src/embedded_flutter_view.mm
+            ${BRIDGE_DIR}/src/native_cocoa_view.mm)
+        set_source_files_properties(
+            ${BRIDGE_DIR}/src/embedded_flutter_view.mm
+            ${BRIDGE_DIR}/src/native_cocoa_view.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+        )
     else()
         list(APPEND bridge_sources_no_factory ${BRIDGE_DIR}/src/embedded_flutter_view.cpp)
     endif()
@@ -224,6 +232,7 @@ function(add_dart_vst3_plugin target_name dart_file)
     if(EXISTS ${METADATA_CMAKE_FILE})
         target_compile_definitions(${target_name} PRIVATE
             PLUGIN_NAME="${JSON_PLUGIN_NAME}"
+            PLUGIN_TARGET_NAME=${target_name}
             PLUGIN_VENDOR="${JSON_VENDOR}"
             PLUGIN_VERSION="${JSON_VERSION}"
             PLUGIN_CATEGORY="${JSON_CATEGORY}"
@@ -286,78 +295,78 @@ function(add_dart_vst3_plugin target_name dart_file)
         
         # Set bundle bit for plugins without native library
         get_target_property(PLUGIN_PACKAGE_PATH ${target_name} SMTG_PLUGIN_PACKAGE_PATH)
-        if(NOT EXISTS ${DART_VST_HOST_LIB})
-            # Copy Dart executable to VST3 bundle
-            if(EXISTS ${DART_PROCESSOR_EXE})
-                add_custom_command(TARGET ${target_name} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy
-                            ${DART_PROCESSOR_EXE}
-                            "${PLUGIN_PACKAGE_PATH}/Contents/MacOS/${target_name}_processor"
-                    COMMAND SetFile -a B "${PLUGIN_PACKAGE_PATH}"
-                    COMMAND xattr -cr "${PLUGIN_PACKAGE_PATH}"
-                    COMMAND codesign --force --deep --sign - "${PLUGIN_PACKAGE_PATH}"
-                    COMMENT "Bundling Dart executable, setting bundle bit, cleaning attrs, and signing VST3 plugin"
-                )
-            else()
-                add_custom_command(TARGET ${target_name} POST_BUILD
-                    COMMAND SetFile -a B "${PLUGIN_PACKAGE_PATH}"
-                    COMMAND xattr -cr "${PLUGIN_PACKAGE_PATH}"
-                    COMMAND codesign --force --deep --sign - "${PLUGIN_PACKAGE_PATH}"
-                    COMMENT "Setting bundle bit, cleaning attrs, and signing VST3 plugin"
-                )
-            endif()
+        set(BUNDLE_COMMANDS)
+
+        # Copy Dart processor executable if exists
+        if(EXISTS ${DART_PROCESSOR_EXE})
+            list(APPEND BUNDLE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy
+                        ${DART_PROCESSOR_EXE}
+                        "${PLUGIN_PACKAGE_PATH}/Contents/MacOS/${target_name}_processor"
+            )
         endif()
-    endif()
 
-    # The native library is optional for standalone VST3 plugins
-    # Only link if it exists (for plugins that need host functionality)
-    if(EXISTS "/workspace/native/build")
-        set(DART_VST_HOST_LIB "/workspace/native/build/libdart_vst_host.dylib")
-    else()
-        set(DART_VST_HOST_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../../native/build/libdart_vst_host.dylib")
-    endif()
+        # Copy and link host dylib if exists
+        if(EXISTS ${DART_VST_HOST_LIB})
+            target_link_libraries(${target_name} PRIVATE ${DART_VST_HOST_LIB})
+            list(APPEND BUNDLE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DART_VST_HOST_LIB}"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/"
+                COMMAND install_name_tool -change @rpath/libdart_vst_host.dylib
+                        @loader_path/../Frameworks/libdart_vst_host.dylib
+                        "${PLUGIN_PACKAGE_PATH}/Contents/MacOS/${target_name}"
+            )
+        endif()
 
-    if(EXISTS ${DART_VST_HOST_LIB})
-        target_link_libraries(${target_name}
-            PRIVATE
-                ${DART_VST_HOST_LIB}
+        # Copy Flutter frameworks if present
+        set(FLUTTER_MAC_FW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/macos/Build/Products/Debug/${target_name}.app/Contents/Frameworks")
+        if(EXISTS "${FLUTTER_MAC_FW_DIR}/FlutterMacOS.framework")
+            list(APPEND BUNDLE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks"
+                COMMAND cp -a "${FLUTTER_MAC_FW_DIR}/FlutterMacOS.framework" "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/"
+                COMMAND cp -a "${FLUTTER_MAC_FW_DIR}/App.framework" "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/"
+                COMMAND codesign --force --sign - "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/FlutterMacOS.framework"
+                COMMAND codesign --force --sign - "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/App.framework"
+            )
+        endif()
+
+        # Set bundle bit, strip quarantine, and sign outer bundle
+        list(APPEND BUNDLE_COMMANDS
+            COMMAND SetFile -a B "${PLUGIN_PACKAGE_PATH}"
+            COMMAND xattr -cr "${PLUGIN_PACKAGE_PATH}"
+            COMMAND codesign --force --sign - "${PLUGIN_PACKAGE_PATH}"
         )
 
-        # Bundle the dylib into the VST3 package on macOS
-        if(SMTG_MAC)
-            get_target_property(PLUGIN_PACKAGE_PATH ${target_name} SMTG_PLUGIN_PACKAGE_PATH)
-            
-            # Create basic command list
-            set(BUNDLE_COMMANDS
-                COMMAND ${CMAKE_COMMAND} -E make_directory 
-                "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${DART_VST_HOST_LIB}"
-                "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks/"
-                COMMAND install_name_tool -change @rpath/libdart_vst_host.dylib 
-                @loader_path/../Frameworks/libdart_vst_host.dylib
-                "${PLUGIN_PACKAGE_PATH}/Contents/MacOS/${target_name}"
-            )
-            
-            # Add Dart executable copy if it exists
-            if(EXISTS ${DART_PROCESSOR_EXE})
-                list(APPEND BUNDLE_COMMANDS
-                    COMMAND ${CMAKE_COMMAND} -E copy
-                    ${DART_PROCESSOR_EXE}
-                    "${PLUGIN_PACKAGE_PATH}/Contents/MacOS/${target_name}_processor"
-                )
-            endif()
-            
-            # Add signing commands
-            list(APPEND BUNDLE_COMMANDS
-                COMMAND SetFile -a B "${PLUGIN_PACKAGE_PATH}"
-                COMMAND xattr -cr "${PLUGIN_PACKAGE_PATH}"
-                COMMAND codesign --force --deep --sign - "${PLUGIN_PACKAGE_PATH}"
-            )
-            
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            ${BUNDLE_COMMANDS}
+            COMMENT "Finalizing and codesigning VST3 bundle"
+        )
+    elseif(SMTG_WIN)
+        set(FLUTTER_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows/x64/runner/Debug")
+        if(EXISTS "${FLUTTER_WIN_DIR}/flutter_windows.dll")
             add_custom_command(TARGET ${target_name} POST_BUILD
-                ${BUNDLE_COMMANDS}
-                COMMENT "Bundling libdart_vst_host.dylib and Dart executable, fixing rpath, setting bundle bit, cleaning attrs, and signing"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${FLUTTER_WIN_DIR}/flutter_windows.dll"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-win/flutter_windows.dll"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${FLUTTER_WIN_DIR}/data"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-win/data"
+                COMMENT "Bundling Flutter Windows DLL and assets into VST3 package"
+            )
+        endif()
+    elseif(SMTG_LINUX)
+        set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/debug/bundle")
+        if(EXISTS "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/libflutter_linux_gtk.so"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${FLUTTER_LINUX_DIR}/data"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/data"
+                COMMENT "Bundling Flutter Linux shared object and assets into VST3 package"
             )
         endif()
     endif()

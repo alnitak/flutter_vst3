@@ -113,6 +113,7 @@ public:
         shm->sampleRate = sampleRate;
         shm->maxBlockSize = maxBlockSize;
         shm->command = VST3_CMD_IDLE;
+        vst3_set_active_shm(shm_name.c_str(), shm);
 
         sem_ready = sem_open(sem_ready_name.c_str(), O_CREAT, 0666, 0);
         sem_done = sem_open(sem_done_name.c_str(), O_CREAT, 0666, 0);
@@ -209,6 +210,7 @@ public:
         if (!initialized) return;
 
         if (shm) {
+            vst3_set_active_shm(nullptr, nullptr);
             shm->command = VST3_CMD_TERMINATE;
             sem_post(sem_ready);
             munmap(shm, VST3_SHM_TOTAL_SIZE);
