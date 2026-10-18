@@ -85,7 +85,21 @@ class EchoProcessor {
       // Advance write index
       _writeIndex = (_writeIndex + 1) % _delayBufferSize;
     }
+
+    _snapshotWaveform(outputL, outputR);
   }
+
+  /// Latest audio output samples shared with the GUI visualizer.
+  static final List<double> waveformBuffer = List<double>.filled(256, 0.0);
+
+  /// Copies downsampled stereo output samples into the waveform buffer.
+  void _snapshotWaveform(List<double> outL, List<double> outR) {
+    final count = outL.length < 256 ? outL.length : 256;
+    for (var i = 0; i < count; i++) {
+      waveformBuffer[i] = (outL[i] + outR[i]) * 0.5;
+    }
+  }
+
   
   /// Soft saturation for controlled feedback limiting
   double _softSaturate(double x) {

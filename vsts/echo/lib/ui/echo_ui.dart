@@ -1,9 +1,14 @@
 /// Flutter UI for Echo VST3 plugin
 /// This runs in the SAME process/isolate as the audio processing
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_vst3/flutter_vst3.dart';
 import '../src/echo_parameters.dart';
+import '../src/echo_processor.dart';
 
+
+/// Main UI screen for the Echo VST3 plugin.
 class EchoUI extends StatefulWidget {
   const EchoUI({super.key});
 
@@ -12,14 +17,11 @@ class EchoUI extends StatefulWidget {
 }
 
 class _EchoUIState extends State<EchoUI> {
-  late final VST3ParameterBinding _binding;
+  final VST3ParameterBinding _binding = VST3ParameterBinding.getInstance();
   
   @override
   void initState() {
     super.initState();
-    _binding = VST3ParameterBinding.getInstance();
-    
-    // Listen for parameter changes from DAW
     _binding.addListener(_onParametersChanged);
   }
   
@@ -30,7 +32,6 @@ class _EchoUIState extends State<EchoUI> {
   }
   
   void _onParametersChanged() {
-    // Rebuild UI when parameters change from DAW
     setState(() {});
   }
   
@@ -90,12 +91,13 @@ class _EchoUIState extends State<EchoUI> {
                 value ? 1.0 : 0.0,
               );
             },
-            activeColor: Theme.of(context).colorScheme.primary,
+            activeThumbColor: Theme.of(context).colorScheme.primary,
           ),
         ],
       ),
     );
   }
+
   
   @override
   Widget build(BuildContext context) {
@@ -106,40 +108,174 @@ class _EchoUIState extends State<EchoUI> {
         title: const Text('Echo VST3'),
         centerTitle: true,
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 600),
-          child: Card(
-            margin: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 24),
-                Text(
-                  'Echo Effect',
-                  style: Theme.of(context).textTheme.headlineMedium,
+      body: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: Card(
+                    margin: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 24),
+                        Text(
+                          'Echo Effect',
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                        const SizedBox(height: 32),
+                        _buildParameterSlider(
+                          EchoParameters.kDelayTimeParam,
+                          'Delay Time',
+                        ),
+                        _buildParameterSlider(
+                          EchoParameters.kFeedbackParam,
+                          'Feedback',
+                        ),
+                        _buildParameterSlider(
+                          EchoParameters.kMixParam,
+                          'Mix',
+                        ),
+                        const Divider(height: 32),
+                        _buildBypassToggle(),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 32),
-                _buildParameterSlider(
-                  EchoParameters.kDelayTimeParam,
-                  'Delay Time',
-                ),
-                _buildParameterSlider(
-                  EchoParameters.kFeedbackParam,
-                  'Feedback',
-                ),
-                _buildParameterSlider(
-                  EchoParameters.kMixParam,
-                  'Mix',
-                ),
-                const Divider(height: 32),
-                _buildBypassToggle(),
-                const SizedBox(height: 24),
-              ],
+              ),
             ),
+          ),
+          const EchoWaveformVisualizer(height: 150.0),
+        ],
+      ),
+    );
+  }
+}
+
+/// Custom oscilloscope visualizer widget displaying real-time audio waveform.
+class EchoWaveformVisualizer extends StatefulWidget {
+  final double height;
+  final Color waveColor;
+
+  const EchoWaveformVisualizer({
+    super.key,
+    this.height = 150.0,
+    this.waveColor = const Color(0xFF00E5FF),
+  });
+
+  @override
+  State<EchoWaveformVisualizer> createState() => _EchoWaveformVisualizerState();
+}
+
+class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _tickerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tickerController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _tickerController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: widget.height,
+      color: Colors.black,
+      child: AnimatedBuilder(
+        animation: _tickerController!,
+        builder: (context, _) => CustomPaint(
+          size: Size(double.infinity, widget.height),
+          painter: _EchoWaveformPainter(
+            samples: EchoProcessor.waveformBuffer,
+            color: widget.waveColor,
           ),
         ),
       ),
     );
   }
+}
+
+class _EchoWaveformPainter extends CustomPainter {
+  final List<double> samples;
+  final Color color;
+
+  _EchoWaveformPainter({required this.samples, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _drawGrid(canvas, size);
+    _drawWave(canvas, size);
+  }
+
+  void _drawGrid(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0x22FFFFFF)
+      ..strokeWidth = 1.0;
+    canvas.drawLine(
+      Offset(0, size.height / 2),
+      Offset(size.width, size.height / 2),
+      gridPaint,
+    );
+  }
+
+  void _drawWave(Canvas canvas, Size size) {
+    switch (samples.isEmpty) {
+      case true:
+        return;
+      case false:
+        final path = _buildPath(size);
+        _renderPath(canvas, path);
+    }
+  }
+
+  Path _buildPath(Size size) {
+    final path = Path();
+    final slice = size.width / (samples.length - 1);
+    final centerY = size.height / 2;
+
+    for (var i = 0; i < samples.length; i++) {
+      final x = i * slice;
+      final y = centerY - (samples[i].clamp(-1.0, 1.0) * (size.height * 0.44));
+      switch (i == 0) {
+        case true:
+          path.moveTo(x, y);
+        case false:
+          path.lineTo(x, y);
+      }
+    }
+    return path;
+  }
+
+  void _renderPath(Canvas canvas, Path path) {
+    final glow = Paint()
+      ..color = color.withValues(alpha: 0.3)
+      ..strokeWidth = 5.0
+      ..style = PaintingStyle.stroke
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+    final line = Paint()
+      ..color = color
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(path, glow);
+    canvas.drawPath(path, line);
+  }
+
+
+  @override
+  bool shouldRepaint(covariant _EchoWaveformPainter oldDelegate) => true;
 }
