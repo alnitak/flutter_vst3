@@ -169,11 +169,13 @@ function(add_dart_vst3_plugin target_name dart_file)
     # Check if native C++ processor exists (transpiled from Dart)
     set(NATIVE_PROCESSOR_FILE "${CMAKE_CURRENT_BINARY_DIR}/generated/${target_name}_processor_native.cpp")
     
-    # Bridge components - SIMPLE launcher only
-    set(bridge_sources_no_factory
-        ${BRIDGE_DIR}/src/plugin_view.cpp
-        ${BRIDGE_DIR}/src/embedded_flutter_view.mm
-    )
+    # Bridge components - Platform-specific view
+    set(bridge_sources_no_factory)
+    if(SMTG_MAC)
+        list(APPEND bridge_sources_no_factory ${BRIDGE_DIR}/src/embedded_flutter_view.mm)
+    else()
+        list(APPEND bridge_sources_no_factory ${BRIDGE_DIR}/src/embedded_flutter_view.cpp)
+    endif()
     
     if(EXISTS ${NATIVE_PROCESSOR_FILE})
         message(STATUS "Using native C++ processor: ${NATIVE_PROCESSOR_FILE}")
