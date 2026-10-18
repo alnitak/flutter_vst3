@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter_vst3/flutter_vst3.dart';
 import 'src/echo_parameters.dart';
 import 'src/echo_processor.dart';
@@ -15,10 +16,10 @@ final class _EchoProcessorWrapper {
       _parameters.setParameter(paramId, value);
 
   void processStereo(
-    List<double> inputL,
-    List<double> inputR,
-    List<double> outputL,
-    List<double> outputR,
+    Float32List inputL,
+    Float32List inputR,
+    Float32List outputL,
+    Float32List outputR,
   ) =>
       _processor.processStereo(inputL, inputR, outputL, outputR, _parameters);
 

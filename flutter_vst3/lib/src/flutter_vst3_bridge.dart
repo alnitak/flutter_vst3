@@ -1,4 +1,5 @@
 import 'dart:ffi' as ffi;
+import 'dart:typed_data';
 
 /// Abstract interface that all Dart VST3 processors must implement
 abstract class VST3Processor {
@@ -6,8 +7,8 @@ abstract class VST3Processor {
   void initialize(double sampleRate, int maxBlockSize);
 
   /// Process stereo audio
-  void processStereo(List<double> inputL, List<double> inputR,
-                    List<double> outputL, List<double> outputR);
+  void processStereo(Float32List inputL, Float32List inputR,
+                    Float32List outputL, Float32List outputR);
 
   /// Set parameter value (normalized 0.0-1.0)
   void setParameter(int paramId, double normalizedValue);
@@ -74,26 +75,13 @@ class VST3Bridge {
       throw StateError('CRITICAL VST3 BRIDGE FAILURE: No processor registered! Audio processing CANNOT continue without a Dart processor! Call VST3Bridge.registerProcessor() first!');
     }
 
-    // Convert C pointers to Dart lists
+    // Directly process zero-copy typed lists
     final inL = inputL.asTypedList(numSamples);
     final inR = inputR.asTypedList(numSamples);
     final outL = outputL.asTypedList(numSamples);
     final outR = outputR.asTypedList(numSamples);
 
-    // Convert float arrays to double arrays for Dart processing
-    final dartInL = List<double>.generate(numSamples, (i) => inL[i].toDouble());
-    final dartInR = List<double>.generate(numSamples, (i) => inR[i].toDouble());
-    final dartOutL = List<double>.filled(numSamples, 0.0);
-    final dartOutR = List<double>.filled(numSamples, 0.0);
-
-    // Process through Dart processor
-    _processor!.processStereo(dartInL, dartInR, dartOutL, dartOutR);
-
-    // Convert back to C float arrays
-    for (int i = 0; i < numSamples; i++) {
-      outL[i] = dartOutL[i];
-      outR[i] = dartOutR[i];
-    }
+    _processor!.processStereo(inL, inR, outL, outR);
   }
 
   /// Set parameter value

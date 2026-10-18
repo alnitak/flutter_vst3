@@ -1,12 +1,13 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'echo_parameters.dart';
 
 /// Simple echo/delay effect processor that FAILS HARD without parameters
 class EchoProcessor {
   static const int _delayBufferSize = 132300; // ~3 seconds at 44.1kHz
   
-  final List<double> _delayBufferL = List.filled(_delayBufferSize, 0.0);
-  final List<double> _delayBufferR = List.filled(_delayBufferSize, 0.0);
+  final Float32List _delayBufferL = Float32List(_delayBufferSize);
+  final Float32List _delayBufferR = Float32List(_delayBufferSize);
   int _writeIndex = 0;
   
   double _sampleRate = 44100.0;
@@ -22,10 +23,10 @@ class EchoProcessor {
   }
 
   void _validateBuffers(
-    List<double> inL,
-    List<double> inR,
-    List<double> outL,
-    List<double> outR,
+    Float32List inL,
+    Float32List inR,
+    Float32List outL,
+    Float32List outR,
   ) {
     if (!_initialized) {
       throw StateError(
@@ -42,10 +43,10 @@ class EchoProcessor {
   }
 
   void _copyBypass(
-    List<double> inL,
-    List<double> inR,
-    List<double> outL,
-    List<double> outR,
+    Float32List inL,
+    Float32List inR,
+    Float32List outL,
+    Float32List outR,
   ) {
     for (var i = 0; i < inL.length; i++) {
       outL[i] = inL[i];
@@ -60,8 +61,8 @@ class EchoProcessor {
     double feedbackAmt,
     double wet,
     double dry,
-    List<double> outL,
-    List<double> outR,
+    Float32List outL,
+    Float32List outR,
     int i,
   ) {
     _currentDelaySamples += (targetDelay - _currentDelaySamples) * _smoothCoeff;
@@ -82,10 +83,10 @@ class EchoProcessor {
 
   /// Process stereo audio block with parameters-driven echo that FAILS HARD
   void processStereo(
-    List<double> inputL,
-    List<double> inputR, 
-    List<double> outputL,
-    List<double> outputR, 
+    Float32List inputL,
+    Float32List inputR, 
+    Float32List outputL,
+    Float32List outputR, 
     EchoParameters parameters,
   ) {
     _validateBuffers(inputL, inputR, outputL, outputR);
@@ -110,10 +111,10 @@ class EchoProcessor {
   }
 
   /// Latest audio output samples shared with the GUI visualizer.
-  static final List<double> waveformBuffer = List<double>.filled(256, 0.0);
+  static final Float32List waveformBuffer = Float32List(256);
 
   /// Copies downsampled stereo output samples into the waveform buffer.
-  void _snapshotWaveform(List<double> outL, List<double> outR) {
+  void _snapshotWaveform(Float32List outL, Float32List outR) {
     final count = outL.length < 256 ? outL.length : 256;
     for (var i = 0; i < count; i++) {
       waveformBuffer[i] = (outL[i] + outR[i]) * 0.5;

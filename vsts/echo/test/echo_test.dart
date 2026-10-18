@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:echo/src/echo_processor.dart';
 import 'package:echo/src/echo_parameters.dart';
@@ -20,10 +21,10 @@ void main() {
       parameters.feedback = 0.7; // High feedback
       parameters.delayTime = 0.3; // Medium delay
       
-      final inputL = List.filled(128, 0.5);
-      final inputR = List.filled(128, 0.3);
-      final outputL = List.filled(128, 0.0);
-      final outputR = List.filled(128, 0.0);
+      final inputL = Float32List(128)..fillRange(0, 128, 0.5);
+      final inputR = Float32List(128)..fillRange(0, 128, 0.3);
+      final outputL = Float32List(128);
+      final outputR = Float32List(128);
       
       processor.processStereo(inputL, inputR, outputL, outputR, parameters);
       
@@ -41,14 +42,14 @@ void main() {
       parameters.delayTime = 0.2; // Fast delay
       
       // Process silence first to clear buffers
-      final silence = List.filled(128, 0.0);
-      final output = List.filled(128, 0.0);
+      final silence = Float32List(128);
+      final output = Float32List(128);
       processor.processStereo(silence, silence, output, output, parameters);
       
       // Now process a short impulse
-      final impulse = List.filled(128, 0.0);
+      final impulse = Float32List(128);
       impulse[0] = 1.0; // Single sample impulse
-      final impulseOutput = List.filled(128, 0.0);
+      final impulseOutput = Float32List(128);
       
       processor.processStereo(impulse, impulse, impulseOutput, impulseOutput, parameters);
       
@@ -65,8 +66,8 @@ void main() {
       // After reset, should still work
       final parameters = EchoParameters();
       parameters.mix = 0.5; // Moderate settings
-      final input = List.filled(128, 0.1);
-      final output = List.filled(128, 0.0);
+      final input = Float32List(128)..fillRange(0, 128, 0.1);
+      final output = Float32List(128);
       processor.processStereo(input, input, output, output, parameters);
       
       expect(output.any((sample) => sample != 0.0), isTrue);
@@ -80,13 +81,15 @@ void main() {
         ..feedback = 0.5
         ..delayTime = 0.1;
       
-      final input = List.generate(512, (i) => (i % 32 == 0) ? 0.8 : 0.0);
-      final output = List.filled(512, 0.0);
+      final input = Float32List.fromList(
+        List.generate(512, (i) => (i % 32 == 0) ? 0.8 : 0.0),
+      );
+      final output = Float32List(512);
       processor.processStereo(input, input, output, output, parameters);
 
       // Change delayTime sharply
       parameters.delayTime = 0.6;
-      final output2 = List.filled(512, 0.0);
+      final output2 = Float32List(512);
       processor.processStereo(input, input, output2, output2, parameters);
 
       for (var i = 1; i < output2.length; i++) {
@@ -120,12 +123,12 @@ void main() {
       plugin.setActive(true);
       
       final inputs = [
-        List.filled(128, 0.5),
-        List.filled(128, 0.3)
+        Float32List(128)..fillRange(0, 128, 0.5),
+        Float32List(128)..fillRange(0, 128, 0.3),
       ];
       final outputs = [
-        List.filled(128, 0.0),
-        List.filled(128, 0.0)
+        Float32List(128),
+        Float32List(128),
       ];
       
       plugin.processAudio(inputs, outputs);
