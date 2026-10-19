@@ -175,6 +175,7 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
   Timer? _timer;
   Vst3AudioBufferReader? _reader;
   List<double> _samples = const [];
+  bool _fetchingReader = false;
 
   @override
   void initState() {
@@ -185,21 +186,32 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
   }
 
   void _onBindingUpdated() {
-    if (_reader != null && !_reader!.isValid) {
-      _reader = null;
-    }
+    _initReader();
   }
 
   void _initReader() async {
-    final reader = await VST3ParameterBinding.getInstance().getAudioBufferReader();
-    if (mounted && reader != null && reader.isValid) {
-      _reader = reader;
+    if (_fetchingReader) return;
+    _fetchingReader = true;
+    try {
+      final reader = await VST3ParameterBinding.getInstance().getAudioBufferReader(forceRefresh: true);
+      if (mounted) {
+        _reader = (reader != null && reader.isValid) ? reader : null;
+      }
+    } finally {
+      _fetchingReader = false;
     }
   }
 
   void _pollWaveform() {
     final reader = _reader;
-    if (reader == null || !reader.isValid || !mounted) return;
+    if (reader == null) {
+      _initReader();
+      return;
+    }
+    if (!reader.isValid || !mounted) {
+      _reader = null;
+      return;
+    }
     try {
       final samples = reader.getLatestOutputSamples(maxCount: 256);
       if (samples.isNotEmpty && mounted) {

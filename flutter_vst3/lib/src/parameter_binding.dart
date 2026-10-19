@@ -41,6 +41,10 @@ class VST3ParameterBinding {
         case 'onHostDetached':
           _audioReader = null;
           notifyListeners();
+        case 'onHostAttached':
+          _audioReader = null;
+          await loadInitialParameters();
+          notifyListeners();
         default:
           break;
       }
@@ -153,8 +157,8 @@ class VST3ParameterBinding {
   Vst3AudioBufferReader? _audioReader;
 
   /// Obtains direct zero-copy read access to the audio buffers in shared memory.
-  Future<Vst3AudioBufferReader?> getAudioBufferReader() async {
-    if (_audioReader != null) return _audioReader;
+  Future<Vst3AudioBufferReader?> getAudioBufferReader({bool forceRefresh = false}) async {
+    if (_audioReader != null && !forceRefresh) return _audioReader;
     try {
       final info = await _channel.invokeMapMethod<String, dynamic>('getSharedMemoryInfo');
       if (info != null) {

@@ -818,13 +818,16 @@ struct LinuxFlutterHost {
             }
         }
 
-        // On reopen, synchronize parameters with the Flutter UI
-        if (sSharedChannel && sActiveController) {
-            int count = sActiveController->getParameterCount();
-            for (int i = 0; i < count; ++i) {
-                Steinberg::Vst::ParameterInfo info{};
-                if (sActiveController->getParameterInfo(i, info) == Steinberg::kResultTrue) {
-                    updateParam(info.id, sActiveController->getParamNormalized(info.id));
+        // On reopen, synchronize parameters and notify Flutter UI that host is attached
+        if (sSharedChannel) {
+            fl_method_channel_invoke_method(sSharedChannel, "onHostAttached", nullptr, nullptr, nullptr, nullptr);
+            if (sActiveController) {
+                int count = sActiveController->getParameterCount();
+                for (int i = 0; i < count; ++i) {
+                    Steinberg::Vst::ParameterInfo info{};
+                    if (sActiveController->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                        updateParam(info.id, sActiveController->getParamNormalized(info.id));
+                    }
                 }
             }
         }
