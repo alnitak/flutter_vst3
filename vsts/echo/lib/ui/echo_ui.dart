@@ -181,27 +181,43 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
     super.initState();
     _initReader();
     _timer = Timer.periodic(const Duration(milliseconds: 33), (_) => _pollWaveform());
+    VST3ParameterBinding.getInstance().addListener(_onBindingUpdated);
+  }
+
+  void _onBindingUpdated() {
+    if (_reader != null && !_reader!.isValid) {
+      _reader = null;
+    }
   }
 
   void _initReader() async {
     final reader = await VST3ParameterBinding.getInstance().getAudioBufferReader();
-    if (mounted) {
+    if (mounted && reader != null && reader.isValid) {
       _reader = reader;
     }
   }
 
   void _pollWaveform() {
     final reader = _reader;
-    if (reader != null && mounted) {
-      setState(() {
-        _samples = reader.getLatestOutputSamples(maxCount: 256);
-      });
+    if (reader == null || !reader.isValid || !mounted) return;
+    try {
+      final samples = reader.getLatestOutputSamples(maxCount: 256);
+      if (samples.isNotEmpty && mounted) {
+        setState(() {
+          _samples = samples;
+        });
+      }
+    } catch (_) {
+      _reader = null;
     }
   }
 
   @override
   void dispose() {
+    VST3ParameterBinding.getInstance().removeListener(_onBindingUpdated);
     _timer?.cancel();
+    _timer = null;
+    _reader = null;
     super.dispose();
   }
 

@@ -43,6 +43,8 @@
     #include <fcntl.h>
     #include <unistd.h>
     #include <sys/wait.h>
+    #include <sys/prctl.h>
+    #include <signal.h>
 #endif
 
 // Forward declaration to retrieve bundle executable path
@@ -222,6 +224,9 @@ public:
         }
 
         if (child_pid == 0) {
+#if defined(__linux__)
+            prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
             execl(dart_exe_path.c_str(), "{{PLUGIN_ID}}_processor",
                   shm_name.c_str(), sem_ready_name.c_str(), sem_done_name.c_str(), nullptr);
             exit(1);
@@ -322,7 +327,9 @@ public:
             shm = nullptr;
 #else
             sem_post(sem_ready);
-            munmap(shm, VST3_SHM_TOTAL_SIZE);
+            shm->magic = 0;
+            mmap(shm, VST3_SHM_TOTAL_SIZE, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
             shm = nullptr;
 #endif
         }
@@ -363,8 +370,14 @@ public:
             sem_done = nullptr;
         }
         if (child_pid > 0) {
+            kill(child_pid, SIGTERM);
             int status;
-            waitpid(child_pid, &status, WNOHANG);
+            for (int i = 0; i < 20; ++i) {
+                if (waitpid(child_pid, &status, WNOHANG) != 0) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            kill(child_pid, SIGKILL);
+            waitpid(child_pid, &status, 0);
             child_pid = -1;
         }
 #endif

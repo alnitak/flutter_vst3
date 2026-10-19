@@ -38,6 +38,9 @@ class VST3ParameterBinding {
           _handleParamChanged(call.arguments);
         case 'onAudioWaveform':
           _handleWaveform(call.arguments);
+        case 'onHostDetached':
+          _audioReader = null;
+          notifyListeners();
         default:
           break;
       }
@@ -160,6 +163,11 @@ class VST3ParameterBinding {
       }
     } catch (_) {}
     return _audioReader;
+  }
+
+  /// Invalidates and clears the cached shared memory audio buffer reader.
+  void invalidateAudioReader() {
+    _audioReader = null;
   }
 }
 

@@ -634,6 +634,7 @@ struct LinuxFlutterHost {
     int height{650};
     bool mounted{false};
 
+    static inline GtkWidget* sSharedPlug{nullptr};
     static inline FlView* sSharedView{nullptr};
     static inline FlMethodChannel* sSharedChannel{nullptr};
     static inline Steinberg::Vst::EditController* sActiveController{nullptr};
@@ -743,14 +744,21 @@ struct LinuxFlutterHost {
         if (mounted || !parentWindow) return;
         mounted = true;
 
-        plug = gtk_plug_new((Window)(uintptr_t)parentWindow);
-        if (!plug) {
-            fprintf(stderr, "flutter_vst3: gtk_plug_new failed. VST3 GUI embedding on Linux requires an X11 backend (GDK_BACKEND=x11).\n");
-            return;
-        }
-        gtk_widget_set_size_request(plug, width, height);
+        Display* xdpy = gdk_x11_get_default_xdisplay();
 
-        if (!sSharedView) {
+        if (!sSharedPlug) {
+            sSharedPlug = gtk_plug_new((Window)(uintptr_t)parentWindow);
+            if (!sSharedPlug) {
+                fprintf(stderr, "flutter_vst3: gtk_plug_new failed. VST3 GUI embedding on Linux requires an X11 backend (GDK_BACKEND=x11).\n");
+                return;
+            }
+            g_object_ref_sink(sSharedPlug);
+            gtk_widget_set_size_request(sSharedPlug, width, height);
+            gtk_widget_realize(sSharedPlug);
+            gtk_widget_show(sSharedPlug);
+
+            gdk_gl_context_clear_current();
+
             std::string modDir = getModuleDirectory();
             std::string assetsPath = modDir + "/data/flutter_assets";
             std::string icuPath = modDir + "/data/icudtl.dat";
@@ -765,10 +773,6 @@ struct LinuxFlutterHost {
                 fl_dart_project_set_aot_library_path(proj, aotPath.c_str());
             }
 
-            // Disable Impeller on embedded Linux plugin view to prevent OpenGL context
-            // and shader compilation conflicts with the host Flutter engine.
-            fl_dart_project_set_enable_impeller(proj, FALSE);
-
             sSharedView = fl_view_new(proj);
             g_object_ref_sink(sSharedView);
 
@@ -777,16 +781,37 @@ struct LinuxFlutterHost {
             g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
             sSharedChannel = fl_method_channel_new(messenger, "flutter_vst3/parameters", FL_METHOD_CODEC(codec));
             fl_method_channel_set_method_call_handler(sSharedChannel, onMethodCall, nullptr, nullptr);
+
+            gtk_container_add(GTK_CONTAINER(sSharedPlug), GTK_WIDGET(sSharedView));
+        } else {
+            // Re-embed existing persistent plug into the new parentWindow if different
+            GdkWindow* plugWin = gtk_widget_get_window(sSharedPlug);
+            if (plugWin && xdpy) {
+                Window plugXid = gdk_x11_window_get_xid(plugWin);
+                if (plugXid) {
+                    Window currentParent = 0;
+                    Window rootRet = 0;
+                    Window* childrenRet = nullptr;
+                    unsigned int nchildrenRet = 0;
+                    if (XQueryTree(xdpy, plugXid, &rootRet, &currentParent, &childrenRet, &nchildrenRet)) {
+                        if (childrenRet) XFree(childrenRet);
+                    }
+                    if (currentParent != (Window)(uintptr_t)parentWindow) {
+                        XReparentWindow(xdpy, plugXid, (Window)(uintptr_t)parentWindow, 0, 0);
+                    }
+                    XResizeWindow(xdpy, plugXid, width, height);
+                }
+            }
         }
 
-        gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(sSharedView));
+        plug = sSharedPlug;
+        gtk_widget_set_size_request(plug, width, height);
         gtk_widget_show_all(plug);
 
         GdkWindow* plugWin = gtk_widget_get_window(plug);
         if (plugWin) {
             gdk_window_show(plugWin);
             Window plugXid = gdk_x11_window_get_xid(plugWin);
-            Display* xdpy = gdk_x11_get_default_xdisplay();
             if (xdpy && plugXid) {
                 XMapRaised(xdpy, plugXid);
                 XFlush(xdpy);
@@ -818,17 +843,14 @@ struct LinuxFlutterHost {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
         }
-        if (plug && sSharedView) {
-            GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(sSharedView));
-            if (parent == plug) {
-                gtk_widget_hide(GTK_WIDGET(sSharedView));
-                gtk_container_remove(GTK_CONTAINER(plug), GTK_WIDGET(sSharedView));
-            }
+        if (sSharedChannel) {
+            fl_method_channel_invoke_method(sSharedChannel, "onHostDetached", nullptr, nullptr, nullptr, nullptr);
         }
-        if (plug) {
-            gtk_widget_destroy(plug);
-            plug = nullptr;
+        if (sSharedPlug) {
+            gtk_widget_hide(sSharedPlug);
         }
+        gdk_gl_context_clear_current();
+        plug = nullptr;
         sActiveController = nullptr;
         mounted = false;
         parentWindow = nullptr;

@@ -42,49 +42,99 @@ final class Vst3AudioBufferReader {
     return (magic == _vst3Magic) ? Vst3AudioBufferReader._(ptr) : null;
   }
 
+  /// Checks whether the underlying shared memory block is still valid and active.
+  bool get isValid {
+    if (_base == nullptr || _base.address == 0) return false;
+    try {
+      final magic = Pointer<Uint32>.fromAddress(_base.address).value;
+      return magic == _vst3Magic;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Raw base memory pointer of the mapped shared memory block.
   Pointer<Uint8> get baseAddress => _base;
 
   /// Current number of valid samples processed in the active audio block.
-  int get numSamples => _numSamplesPtr.value.clamp(0, _maxSamples);
+  int get numSamples {
+    if (!isValid) return 0;
+    try {
+      return _numSamplesPtr.value.clamp(0, _maxSamples);
+    } catch (_) {
+      return 0;
+    }
+  }
 
   /// Host audio sample rate in Hz.
-  double get sampleRate => _sampleRatePtr.value;
+  double get sampleRate {
+    if (!isValid) return 44100.0;
+    try {
+      return _sampleRatePtr.value;
+    } catch (_) {
+      return 44100.0;
+    }
+  }
 
   /// Returns a zero-copy typed list view over the left output channel buffer.
   Float32List getOutputL([int? count]) {
-    final n = (count ?? numSamples).clamp(0, _maxSamples);
-    return _outputL.asTypedList(n);
+    if (!isValid) return Float32List(0);
+    try {
+      final n = (count ?? numSamples).clamp(0, _maxSamples);
+      return _outputL.asTypedList(n);
+    } catch (_) {
+      return Float32List(0);
+    }
   }
 
   /// Returns a zero-copy typed list view over the right output channel buffer.
   Float32List getOutputR([int? count]) {
-    final n = (count ?? numSamples).clamp(0, _maxSamples);
-    return _outputR.asTypedList(n);
+    if (!isValid) return Float32List(0);
+    try {
+      final n = (count ?? numSamples).clamp(0, _maxSamples);
+      return _outputR.asTypedList(n);
+    } catch (_) {
+      return Float32List(0);
+    }
   }
 
   /// Returns a zero-copy typed list view over the left input channel buffer.
   Float32List getInputL([int? count]) {
-    final n = (count ?? numSamples).clamp(0, _maxSamples);
-    return _inputL.asTypedList(n);
+    if (!isValid) return Float32List(0);
+    try {
+      final n = (count ?? numSamples).clamp(0, _maxSamples);
+      return _inputL.asTypedList(n);
+    } catch (_) {
+      return Float32List(0);
+    }
   }
 
   /// Returns a zero-copy typed list view over the right input channel buffer.
   Float32List getInputR([int? count]) {
-    final n = (count ?? numSamples).clamp(0, _maxSamples);
-    return _inputR.asTypedList(n);
+    if (!isValid) return Float32List(0);
+    try {
+      final n = (count ?? numSamples).clamp(0, _maxSamples);
+      return _inputR.asTypedList(n);
+    } catch (_) {
+      return Float32List(0);
+    }
   }
 
   /// Returns a mixed stereo waveform snapshot up to [maxCount] samples.
   Float32List getLatestOutputSamples({int maxCount = 256}) {
-    final active = numSamples;
-    final n = (active == 0 ? maxCount : active).clamp(1, maxCount);
-    final out = Float32List(n);
-    final lList = _outputL.asTypedList(n);
-    final rList = _outputR.asTypedList(n);
-    for (var i = 0; i < n; i++) {
-      out[i] = (lList[i] + rList[i]) * 0.5;
+    if (!isValid) return Float32List(0);
+    try {
+      final active = numSamples;
+      final n = (active == 0 ? maxCount : active).clamp(1, maxCount);
+      final out = Float32List(n);
+      final lList = _outputL.asTypedList(n);
+      final rList = _outputR.asTypedList(n);
+      for (var i = 0; i < n; i++) {
+        out[i] = (lList[i] + rList[i]) * 0.5;
+      }
+      return out;
+    } catch (_) {
+      return Float32List(0);
     }
-    return out;
   }
 }
