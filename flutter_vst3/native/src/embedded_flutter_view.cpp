@@ -9,6 +9,7 @@
 #include <memory>
 #include <variant>
 #include <unordered_map>
+#include "vst3_shared_memory.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -618,59 +619,160 @@ private:
 
 #elif defined(__linux__)
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <gtk/gtk.h>
 #include <gtk/gtkx.h>
 
-/// Forward declarations for Linux Flutter embedding types.
-typedef struct _FlDartProject FlDartProject;
-typedef struct _FlView FlView;
+#if defined(__linux__) && defined(FLUTTER_VST3_HAS_FLUTTER)
+#include <flutter_linux/flutter_linux.h>
 
 struct LinuxFlutterHost {
-    void* flDll{nullptr};
     GtkWidget* plug{nullptr};
     FlView* flView{nullptr};
+    FlMethodChannel* channel{nullptr};
+    Steinberg::Vst::EditController* controller{nullptr};
     guint idleSourceId{0};
     void* parentWindow{nullptr};
     int width{600};
     int height{650};
 
-    bool init(void* parentX11, int w, int h) {
+    static std::string getModuleDirectory() {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&createEmbeddedFlutterView), &info) && info.dli_fname) {
+            std::string path(info.dli_fname);
+            size_t lastSlash = path.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                return path.substr(0, lastSlash);
+            }
+        }
+        return "";
+    }
+
+    static bool checkHasFlutter() {
+        std::string modDir = getModuleDirectory();
+        if (modDir.empty()) return false;
+        std::string assetsDir = modDir + "/data/flutter_assets";
+        struct stat st;
+        return (stat(assetsDir.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+    }
+
+    bool init(void* parentX11, Steinberg::Vst::EditController* ctrl, int w, int h) {
+        if (getenv("GDK_BACKEND") == nullptr) {
+            setenv("GDK_BACKEND", "x11", 0);
+        }
         if (!gtk_init_check(nullptr, nullptr)) return false;
         parentWindow = parentX11;
+        controller = ctrl;
         width = w;
         height = h;
 
-        // Post-mount via GTK idle source so it executes on the GTK main loop
-        // AFTER the Dart FFI call (openEditorWindow) has returned to the event loop.
-        idleSourceId = g_idle_add(+[](gpointer data) -> gboolean {
-            auto* self = static_cast<LinuxFlutterHost*>(data);
-            self->idleSourceId = 0;
-            self->mount();
-            return G_SOURCE_REMOVE;
-        }, this);
+        mount();
         return true;
+    }
+
+    static void onMethodCall(FlMethodChannel* ch, FlMethodCall* methodCall, gpointer userData) {
+        auto* self = static_cast<LinuxFlutterHost*>(userData);
+        const gchar* name = fl_method_call_get_name(methodCall);
+        FlValue* args = fl_method_call_get_args(methodCall);
+
+        if (g_strcmp0(name, "getInitialParameters") == 0) {
+            g_autoptr(FlValue) map = fl_value_new_map();
+            if (self->controller) {
+                int count = self->controller->getParameterCount();
+                for (int i = 0; i < count; ++i) {
+                    Steinberg::Vst::ParameterInfo info{};
+                    if (self->controller->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                        g_autofree gchar* key = g_strdup_printf("%u", info.id);
+                        fl_value_set_string_take(
+                            map, key,
+                            fl_value_new_float(self->controller->getParamNormalized(info.id)));
+                    }
+                }
+            }
+            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_success_response_new(map));
+            fl_method_call_respond(methodCall, resp, nullptr);
+        } else if (g_strcmp0(name, "setParameter") == 0) {
+            if (self->controller && args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
+                FlValue* idVal = fl_value_lookup_string(args, "id");
+                FlValue* valVal = fl_value_lookup_string(args, "value");
+                if (idVal && valVal) {
+                    int64_t pid = (fl_value_get_type(idVal) == FL_VALUE_TYPE_INT)
+                        ? fl_value_get_int(idVal)
+                        : static_cast<int64_t>(fl_value_get_float(idVal));
+                    double val = (fl_value_get_type(valVal) == FL_VALUE_TYPE_FLOAT)
+                        ? fl_value_get_float(valVal)
+                        : static_cast<double>(fl_value_get_int(valVal));
+                    self->controller->beginEdit(pid);
+                    self->controller->setParamNormalized(pid, val);
+                    self->controller->performEdit(pid, val);
+                    self->controller->endEdit(pid);
+                }
+            }
+            g_autoptr(FlValue) ret = fl_value_new_bool(TRUE);
+            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_success_response_new(ret));
+            fl_method_call_respond(methodCall, resp, nullptr);
+        } else if (g_strcmp0(name, "getSharedMemoryInfo") == 0) {
+            g_autoptr(FlValue) map = fl_value_new_map();
+            const char* shmName = vst3_get_active_shm_name();
+            uintptr_t addr = reinterpret_cast<uintptr_t>(vst3_get_active_shm_ptr());
+            fl_value_set_string_take(map, "shmName", fl_value_new_string(shmName ? shmName : ""));
+            fl_value_set_string_take(map, "address", fl_value_new_int(static_cast<int64_t>(addr)));
+            fl_value_set_string_take(map, "totalSize", fl_value_new_int(static_cast<int64_t>(VST3_SHM_TOTAL_SIZE)));
+            fl_value_set_string_take(map, "maxSamples", fl_value_new_int(static_cast<int64_t>(VST3_SHM_MAX_SAMPLES)));
+            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_success_response_new(map));
+            fl_method_call_respond(methodCall, resp, nullptr);
+        } else {
+            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+            fl_method_call_respond(methodCall, resp, nullptr);
+        }
     }
 
     void mount() {
         if (!parentWindow) return;
-        flDll = dlopen("libflutter_linux_gtk.so", RTLD_LAZY);
-        if (!flDll) return;
 
-        auto fnProjectNew = (FlDartProject* (*)())dlsym(flDll, "fl_dart_project_new");
-        auto fnViewNew = (FlView* (*)(FlDartProject*))dlsym(flDll, "fl_view_new");
-        if (!fnProjectNew || !fnViewNew) return;
-
-        FlDartProject* proj = fnProjectNew();
-        auto fnSetImpeller = (void (*)(FlDartProject*, gboolean))dlsym(flDll, "fl_dart_project_set_enable_impeller");
-        if (fnSetImpeller) {
-            fnSetImpeller(proj, FALSE);
-        }
-
-        flView = fnViewNew(proj);
         plug = gtk_plug_new((Window)(uintptr_t)parentWindow);
+        if (!plug) {
+            fprintf(stderr, "flutter_vst3: gtk_plug_new failed. VST3 GUI embedding on Linux requires an X11 backend (GDK_BACKEND=x11).\n");
+            return;
+        }
         gtk_widget_set_size_request(plug, width, height);
+
+        std::string modDir = getModuleDirectory();
+        std::string assetsPath = modDir + "/data/flutter_assets";
+        std::string icuPath = modDir + "/data/icudtl.dat";
+
+        FlDartProject* proj = fl_dart_project_new();
+        fl_dart_project_set_assets_path(proj, const_cast<gchar*>(assetsPath.c_str()));
+        fl_dart_project_set_icu_data_path(proj, const_cast<gchar*>(icuPath.c_str()));
+
+        flView = fl_view_new(proj);
         gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(flView));
         gtk_widget_show_all(plug);
+
+        GdkWindow* plugWin = gtk_widget_get_window(plug);
+        if (plugWin) {
+            gdk_window_show(plugWin);
+            Window plugXid = gdk_x11_window_get_xid(plugWin);
+            Display* xdpy = gdk_x11_get_default_xdisplay();
+            if (xdpy && plugXid) {
+                XMapRaised(xdpy, plugXid);
+                XFlush(xdpy);
+            }
+        }
+
+        FlEngine* engine = fl_view_get_engine(flView);
+        FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+        g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+        channel = fl_method_channel_new(messenger, "flutter_vst3/parameters", FL_METHOD_CODEC(codec));
+        fl_method_channel_set_method_call_handler(channel, onMethodCall, this, nullptr);
+    }
+
+    void updateParam(Steinberg::Vst::ParamID pid, Steinberg::Vst::ParamValue val) {
+        if (!channel) return;
+        g_autoptr(FlValue) args = fl_value_new_map();
+        fl_value_set_string_take(args, "id", fl_value_new_int(static_cast<int64_t>(pid)));
+        fl_value_set_string_take(args, "value", fl_value_new_float(static_cast<double>(val)));
+        fl_method_channel_invoke_method(channel, "onParameterChanged", args, nullptr, nullptr, nullptr);
     }
 
     void shutdown() {
@@ -678,8 +780,235 @@ struct LinuxFlutterHost {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
         }
-        if (plug) { gtk_widget_destroy(plug); plug = nullptr; flView = nullptr; }
-        if (flDll) { dlclose(flDll); flDll = nullptr; }
+        if (channel) {
+            g_object_unref(channel);
+            channel = nullptr;
+        }
+        if (plug) {
+            gtk_widget_destroy(plug);
+            plug = nullptr;
+            flView = nullptr;
+        }
+        parentWindow = nullptr;
+    }
+};
+#else
+struct LinuxFlutterHost {
+    static bool checkHasFlutter() { return false; }
+    bool init(void*, Steinberg::Vst::EditController*, int, int) { return false; }
+    void updateParam(Steinberg::Vst::ParamID, Steinberg::Vst::ParamValue) {}
+    void shutdown() {}
+};
+#endif
+
+struct LinuxNativeParamRow {
+    Steinberg::Vst::ParamID id{0};
+    GtkWidget* valLabel{nullptr};
+    GtkWidget* scale{nullptr};
+    GtkAdjustment* adj{nullptr};
+};
+
+class LinuxNativeEditorHost {
+public:
+    GtkWidget* plug{nullptr};
+    GtkWidget* mainBox{nullptr};
+    Steinberg::Vst::EditController* controller{nullptr};
+    std::string pluginName;
+    std::vector<LinuxNativeParamRow> rows;
+    bool inScroll{false};
+    guint idleSourceId{0};
+    void* parentWindow{nullptr};
+    int width{540};
+    int height{400};
+
+    bool init(void* parentX11, Steinberg::Vst::EditController* ctrl, const std::string& name, int w, int h) {
+        if (getenv("GDK_BACKEND") == nullptr) {
+            setenv("GDK_BACKEND", "x11", 0);
+        }
+        if (!gtk_init_check(nullptr, nullptr)) return false;
+        parentWindow = parentX11;
+        controller = ctrl;
+        pluginName = name;
+        width = w;
+        height = h;
+
+        mount();
+        return true;
+    }
+
+    void mount() {
+        if (!parentWindow) return;
+        plug = gtk_plug_new((Window)(uintptr_t)parentWindow);
+        if (!plug) return;
+
+        gtk_widget_set_size_request(plug, width, height);
+
+        GtkCssProvider* provider = gtk_css_provider_new();
+        const char* css =
+            "window, plug, box { background-color: #17171c; color: #e6e6eb; }"
+            "label.plugin-title { font-size: 16pt; font-weight: bold; color: #ffffff; }"
+            "label.plugin-sub { font-size: 10pt; color: #888899; }"
+            "label.param-name { font-size: 11pt; font-weight: 600; color: #e6e6eb; }"
+            "label.param-val { font-size: 11pt; font-weight: bold; color: #40c0ff; font-family: monospace; }"
+            "label.footer { font-size: 9pt; color: #666677; }"
+            "scale contents trough { min-height: 4px; background-color: #2d2d37; border-radius: 2px; }"
+            "scale contents trough highlight { background-color: #40c0ff; border-radius: 2px; }"
+            "scale contents trough slider { min-width: 16px; min-height: 16px; margin: -6px; border-radius: 8px; background-color: #ffffff; }";
+        gtk_css_provider_load_from_data(provider, css, -1, nullptr);
+        gtk_style_context_add_provider_for_screen(
+            gdk_screen_get_default(),
+            GTK_STYLE_PROVIDER(provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(provider);
+
+        mainBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+        gtk_widget_set_margin_start(mainBox, 24);
+        gtk_widget_set_margin_end(mainBox, 24);
+        gtk_widget_set_margin_top(mainBox, 16);
+        gtk_widget_set_margin_bottom(mainBox, 16);
+
+        // Title
+        GtkWidget* titleLbl = gtk_label_new(pluginName.empty() ? "VST3 Plugin" : pluginName.c_str());
+        gtk_widget_set_halign(titleLbl, GTK_ALIGN_START);
+        gtk_style_context_add_class(gtk_widget_get_style_context(titleLbl), "plugin-title");
+        gtk_box_pack_start(GTK_BOX(mainBox), titleLbl, FALSE, FALSE, 0);
+
+        // Subtitle
+        GtkWidget* subLbl = gtk_label_new("flutter_vst3 \u2022 Pure Dart DSP & UI");
+        gtk_widget_set_halign(subLbl, GTK_ALIGN_START);
+        gtk_style_context_add_class(gtk_widget_get_style_context(subLbl), "plugin-sub");
+        gtk_box_pack_start(GTK_BOX(mainBox), subLbl, FALSE, FALSE, 0);
+
+        // Separator
+        GtkWidget* sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_box_pack_start(GTK_BOX(mainBox), sep, FALSE, FALSE, 6);
+
+        // Parameter rows
+        rows.clear();
+        if (controller) {
+            int count = controller->getParameterCount();
+            for (int i = 0; i < count; ++i) {
+                Steinberg::Vst::ParameterInfo info{};
+                if (controller->getParameterInfo(i, info) != Steinberg::kResultTrue) continue;
+
+                LinuxNativeParamRow row;
+                row.id = info.id;
+
+                char asciiTitle[128] = {0};
+                Steinberg::UString128(info.title).toAscii(asciiTitle, sizeof(asciiTitle));
+
+                GtkWidget* rowBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+
+                GtkWidget* headerBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+                GtkWidget* nameLbl = gtk_label_new(asciiTitle[0] != '\0' ? asciiTitle : "Param");
+                gtk_widget_set_halign(nameLbl, GTK_ALIGN_START);
+                gtk_style_context_add_class(gtk_widget_get_style_context(nameLbl), "param-name");
+                gtk_box_pack_start(GTK_BOX(headerBox), nameLbl, TRUE, TRUE, 0);
+
+                row.valLabel = gtk_label_new("");
+                gtk_widget_set_halign(row.valLabel, GTK_ALIGN_END);
+                gtk_style_context_add_class(gtk_widget_get_style_context(row.valLabel), "param-val");
+                gtk_box_pack_start(GTK_BOX(headerBox), row.valLabel, FALSE, FALSE, 0);
+
+                gtk_box_pack_start(GTK_BOX(rowBox), headerBox, FALSE, FALSE, 0);
+
+                double currentVal = controller->getParamNormalized(info.id);
+                row.adj = gtk_adjustment_new(currentVal, 0.0, 1.0, 0.001, 0.01, 0.0);
+                row.scale = gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, row.adj);
+                gtk_scale_set_draw_value(GTK_SCALE(row.scale), FALSE);
+                gtk_box_pack_start(GTK_BOX(rowBox), row.scale, FALSE, FALSE, 0);
+
+                struct CallbackData {
+                    LinuxNativeEditorHost* self;
+                    Steinberg::Vst::ParamID paramId;
+                    size_t rowIndex;
+                };
+                auto* cbData = new CallbackData{this, info.id, rows.size()};
+                g_signal_connect_data(row.adj, "value-changed",
+                    G_CALLBACK(+[](GtkAdjustment* adj, gpointer user_data) {
+                        auto* data = static_cast<CallbackData*>(user_data);
+                        if (data->self->inScroll || !data->self->controller) return;
+                        data->self->inScroll = true;
+                        double val = gtk_adjustment_get_value(adj);
+                        data->self->controller->beginEdit(data->paramId);
+                        data->self->controller->setParamNormalized(data->paramId, val);
+                        data->self->controller->performEdit(data->paramId, val);
+                        data->self->controller->endEdit(data->paramId);
+                        data->self->updateValueLabel(data->self->rows[data->rowIndex], val);
+                        data->self->inScroll = false;
+                    }),
+                    cbData,
+                    [](gpointer data, GClosure*) { delete static_cast<CallbackData*>(data); },
+                    G_CONNECT_AFTER);
+
+                updateValueLabel(row, currentVal);
+                gtk_box_pack_start(GTK_BOX(mainBox), rowBox, FALSE, FALSE, 4);
+                rows.push_back(row);
+            }
+
+            // Footer
+            GtkWidget* footer = gtk_label_new("Preallocated Zero-Copy Shared Memory DSP");
+            gtk_widget_set_halign(footer, GTK_ALIGN_CENTER);
+            gtk_style_context_add_class(gtk_widget_get_style_context(footer), "footer");
+            gtk_box_pack_start(GTK_BOX(mainBox), footer, FALSE, FALSE, 8);
+        }
+
+        gtk_container_add(GTK_CONTAINER(plug), mainBox);
+        gtk_widget_show_all(plug);
+
+        GdkWindow* plugWin = gtk_widget_get_window(plug);
+        if (plugWin) {
+            gdk_window_show(plugWin);
+            Window plugXid = gdk_x11_window_get_xid(plugWin);
+            Display* xdpy = gdk_x11_get_default_xdisplay();
+            if (xdpy && plugXid) {
+                XMapRaised(xdpy, plugXid);
+                XFlush(xdpy);
+            }
+        }
+    }
+
+    void updateValueLabel(LinuxNativeParamRow& row, double val) {
+        if (!row.valLabel) return;
+        char buf[128];
+        if (controller) {
+            Steinberg::Vst::String128 str128;
+            if (controller->getParamStringByValue(row.id, val, str128) == Steinberg::kResultTrue) {
+                Steinberg::UString128(str128).toAscii(buf, sizeof(buf));
+                gtk_label_set_text(GTK_LABEL(row.valLabel), buf);
+                return;
+            }
+        }
+        snprintf(buf, sizeof(buf), "%.2f", val);
+        gtk_label_set_text(GTK_LABEL(row.valLabel), buf);
+    }
+
+    void updateParam(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue val) {
+        if (inScroll) return;
+        for (auto& r : rows) {
+            if (r.id == paramId) {
+                inScroll = true;
+                if (r.adj) {
+                    gtk_adjustment_set_value(r.adj, val);
+                }
+                updateValueLabel(r, val);
+                inScroll = false;
+                break;
+            }
+        }
+    }
+
+    void shutdown() {
+        if (idleSourceId != 0) {
+            g_source_remove(idleSourceId);
+            idleSourceId = 0;
+        }
+        if (plug) {
+            gtk_widget_destroy(plug);
+            plug = nullptr;
+            mainBox = nullptr;
+        }
+        rows.clear();
         parentWindow = nullptr;
     }
 };
@@ -692,6 +1021,8 @@ public:
         : controller_(c), pluginName_(name ? name : "VST3 Plugin"), viewHolder_(holder) {
 #if defined(_WIN32) && defined(FLUTTER_VST3_HAS_FLUTTER)
         hasFlutter_ = WinFlutterHost::checkHasFlutter();
+#elif defined(__linux__)
+        hasFlutter_ = LinuxFlutterHost::checkHasFlutter();
 #endif
         if (viewHolder_) *viewHolder_ = this;
     }
@@ -710,6 +1041,12 @@ public:
         }
 #endif
         winHost_.updateParam(paramId, value);
+#elif defined(__linux__)
+        if (hasFlutter_) {
+            linuxFlutterHost_.updateParam(paramId, value);
+            return;
+        }
+        linuxNativeHost_.updateParam(paramId, value);
 #endif
     }
 
@@ -744,7 +1081,17 @@ public:
             winHost_.init((HWND)parent, controller_, pluginName_, 540, h);
         }
 #elif defined(__linux__)
-        hasFlutter_ = linuxHost_.init(parent, 600, 650);
+        if (hasFlutter_) {
+            bool ok = linuxFlutterHost_.init(parent, controller_, 600, 650);
+            if (!ok) {
+                hasFlutter_ = false;
+            }
+        }
+        if (!hasFlutter_) {
+            int count = controller_ ? controller_->getParameterCount() : 0;
+            int h = (std::max)(280, 74 + count * 56 + 36);
+            linuxNativeHost_.init(parent, controller_, pluginName_, 540, h);
+        }
 #endif
         return kResultTrue;
     }
@@ -807,7 +1154,10 @@ private:
 #endif
         winHost_.shutdown();
 #elif defined(__linux__)
-        linuxHost_.shutdown();
+        if (hasFlutter_) {
+            linuxFlutterHost_.shutdown();
+        }
+        linuxNativeHost_.shutdown();
 #endif
         parentView_ = nullptr;
         hasFlutter_ = false;
@@ -824,7 +1174,8 @@ private:
 #endif
     WinNativeEditorHost winHost_;
 #elif defined(__linux__)
-    LinuxFlutterHost linuxHost_;
+    LinuxFlutterHost linuxFlutterHost_;
+    LinuxNativeEditorHost linuxNativeHost_;
 #endif
 };
 

@@ -29,7 +29,8 @@ echo-flutter:
 		cd vsts/echo && flutter build macos --debug; \
 	elif [ "$$(uname)" = "Linux" ]; then \
 		echo "Building Flutter Linux bundle for Echo..."; \
-		cd vsts/echo && flutter build linux; \
+		mkdir -p vsts/echo/build/native_assets/linux; \
+		cd vsts/echo && flutter build linux --debug; \
 	elif echo "$$(uname)" | grep -qiE "mingw|msys|cygwin"; then \
 		echo "Building Flutter Windows bundle for Echo..."; \
 		cd vsts/echo && flutter build windows --debug; \
@@ -169,6 +170,8 @@ install: reverb-vst echo-vst
 		echo "✅ Installed flutter_reverb.vst3 and echo.vst3 to ~/Library/Audio/Plug-Ins/VST3/"; \
 	elif [ "$$(uname)" = "Linux" ]; then \
 		mkdir -p ~/.vst3/; \
+		rm -rf ~/.vst3/flutter_reverb.vst3; \
+		rm -rf ~/.vst3/echo.vst3; \
 		cp -r vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 ~/.vst3/; \
 		cp -r vsts/echo/build/VST3/Release/echo.vst3 ~/.vst3/; \
 		echo "✅ Installed to ~/.vst3/"; \

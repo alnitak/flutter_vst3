@@ -290,6 +290,19 @@ function(add_dart_vst3_plugin target_name dart_file)
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0 gtk+-x11-3.0)
         target_link_libraries(${target_name} PRIVATE PkgConfig::GTK ${CMAKE_DL_LIBS})
+        set(FLUTTER_LINUX_EPHEMERAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/linux/flutter/ephemeral")
+        if(EXISTS "${FLUTTER_LINUX_EPHEMERAL_DIR}/flutter_linux/flutter_linux.h")
+            message(STATUS "Configuring Flutter Linux UI embedding for ${target_name}...")
+            target_include_directories(${target_name} PRIVATE
+                "${FLUTTER_LINUX_EPHEMERAL_DIR}"
+            )
+            target_link_libraries(${target_name} PRIVATE
+                "${FLUTTER_LINUX_EPHEMERAL_DIR}/libflutter_linux_gtk.so"
+            )
+            target_compile_definitions(${target_name} PRIVATE
+                FLUTTER_VST3_HAS_FLUTTER=1
+            )
+        endif()
     endif()
 
     # Set bundle properties on macOS
@@ -406,16 +419,33 @@ function(add_dart_vst3_plugin target_name dart_file)
             )
         endif()
     elseif(SMTG_LINUX)
+        get_target_property(PLUGIN_PACKAGE_PATH ${target_name} SMTG_PLUGIN_PACKAGE_PATH)
+        set(BUNDLE_COMMANDS)
+        if(EXISTS ${DART_PROCESSOR_EXE})
+            list(APPEND BUNDLE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DART_PROCESSOR_EXE}"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/${target_name}_processor"
+            )
+        endif()
         set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/debug/bundle")
+        if(NOT EXISTS "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so")
+            set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/release/bundle")
+        endif()
         if(EXISTS "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so")
-            add_custom_command(TARGET ${target_name} POST_BUILD
+            list(APPEND BUNDLE_COMMANDS
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so"
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/libflutter_linux_gtk.so"
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                         "${FLUTTER_LINUX_DIR}/data"
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/data"
-                COMMENT "Bundling Flutter Linux shared object and assets into VST3 package"
+            )
+        endif()
+        if(BUNDLE_COMMANDS)
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                ${BUNDLE_COMMANDS}
+                COMMENT "Bundling Dart processor and Flutter Linux assets into VST3 package"
             )
         endif()
     endif()
