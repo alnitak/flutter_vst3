@@ -31,6 +31,10 @@ class VST3ParameterBinding {
     }
   }
 
+  bool _isHostAttached = true;
+  /// Whether the plugin GUI is currently attached to an active OS window.
+  bool get isHostAttached => _isHostAttached;
+
   void _initChannel() {
     _channel.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -39,10 +43,16 @@ class VST3ParameterBinding {
         case 'onAudioWaveform':
           _handleWaveform(call.arguments);
         case 'onHostDetached':
+          _isHostAttached = false;
           _audioReader = null;
+          // ignore: avoid_print
+          print('[flutter_vst3] onHostDetached received, audioReader invalidated');
           notifyListeners();
         case 'onHostAttached':
+          _isHostAttached = true;
           _audioReader = null;
+          // ignore: avoid_print
+          print('[flutter_vst3] onHostAttached received, reloading parameters');
           await loadInitialParameters();
           notifyListeners();
         default:

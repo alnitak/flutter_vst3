@@ -371,13 +371,20 @@ public:
         }
         if (child_pid > 0) {
             kill(child_pid, SIGTERM);
-            int status;
+            int status = 0;
+            bool reaped = false;
             for (int i = 0; i < 20; ++i) {
-                if (waitpid(child_pid, &status, WNOHANG) != 0) break;
+                pid_t res = waitpid(child_pid, &status, WNOHANG);
+                if (res == child_pid) {
+                    reaped = true;
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            kill(child_pid, SIGKILL);
-            waitpid(child_pid, &status, 0);
+            if (!reaped) {
+                kill(child_pid, SIGKILL);
+                waitpid(child_pid, &status, 0);
+            }
             child_pid = -1;
         }
 #endif
@@ -397,19 +404,23 @@ extern "C" {
             if (!g_processor) g_processor = new {{PLUGIN_CLASS_NAME}}NativeProcessor();
             g_processor->initialize(sample_rate, max_block_size);
         } catch (const std::exception& e) {
-            fprintf(stderr, "{{PLUGIN_NAME_UPPER}} NATIVE FAILURE: %s\n", e.what());
-            abort();
+            fprintf(stderr, "[vst3_processor] {{PLUGIN_NAME_UPPER}} NATIVE FAILURE: %s\n", e.what());
         }
     }
 
     void {{PLUGIN_ID}}_native_process_stereo(float* inputL, float* inputR,
                                    float* outputL, float* outputR, int samples) {
+        if (!g_processor) {
+            if (outputL && samples > 0) std::memset(outputL, 0, samples * sizeof(float));
+            if (outputR && samples > 0) std::memset(outputR, 0, samples * sizeof(float));
+            return;
+        }
         try {
-            if (!g_processor) throw std::runtime_error("NOT INITIALIZED!");
             g_processor->processStereo(inputL, inputR, outputL, outputR, samples);
         } catch (const std::exception& e) {
-            fprintf(stderr, "{{PLUGIN_NAME_UPPER}} NATIVE FAILURE: %s\n", e.what());
-            abort();
+            fprintf(stderr, "[vst3_processor] {{PLUGIN_NAME_UPPER}} process error: %s\n", e.what());
+            if (outputL && samples > 0) std::memset(outputL, 0, samples * sizeof(float));
+            if (outputR && samples > 0) std::memset(outputR, 0, samples * sizeof(float));
         }
     }
 

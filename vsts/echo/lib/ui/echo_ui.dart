@@ -186,10 +186,20 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
   }
 
   void _onBindingUpdated() {
+    if (!VST3ParameterBinding.getInstance().isHostAttached) {
+      _reader = null;
+      if (mounted && _samples.isNotEmpty) {
+        setState(() {
+          _samples = const [];
+        });
+      }
+      return;
+    }
     _initReader();
   }
 
   void _initReader() async {
+    if (!VST3ParameterBinding.getInstance().isHostAttached) return;
     if (_fetchingReader) return;
     _fetchingReader = true;
     try {
@@ -203,6 +213,7 @@ class _EchoWaveformVisualizerState extends State<EchoWaveformVisualizer> {
   }
 
   void _pollWaveform() {
+    if (!VST3ParameterBinding.getInstance().isHostAttached) return;
     final reader = _reader;
     if (reader == null) {
       _initReader();

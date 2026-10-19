@@ -660,9 +660,10 @@ struct LinuxFlutterHost {
     }
 
     bool init(void* parentX11, Steinberg::Vst::EditController* ctrl, int w, int h) {
-        if (getenv("GDK_BACKEND") == nullptr) {
-            setenv("GDK_BACKEND", "x11", 0);
-        }
+        fprintf(stderr, "[vst3_flutter] LinuxFlutterHost::init: parentX11=%p, size=%dx%d\n",
+                parentX11, w, h);
+        setenv("GDK_BACKEND", "x11", 1);
+        gdk_set_allowed_backends("x11");
         if (!gtk_init_check(nullptr, nullptr)) return false;
         parentWindow = parentX11;
         width = w;
@@ -741,6 +742,8 @@ struct LinuxFlutterHost {
     }
 
     void mount() {
+        fprintf(stderr, "[vst3_flutter] LinuxFlutterHost::mount: mounted=%d, parentWindow=%p, sSharedPlug=%p\n",
+                mounted ? 1 : 0, parentWindow, sSharedPlug);
         if (mounted || !parentWindow) return;
         mounted = true;
 
@@ -842,6 +845,7 @@ struct LinuxFlutterHost {
     }
 
     void shutdown() {
+        fprintf(stderr, "[vst3_flutter] LinuxFlutterHost::shutdown called (plug=%p)\n", plug);
         if (idleSourceId != 0) {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
@@ -889,9 +893,8 @@ public:
     int height{400};
 
     bool init(void* parentX11, Steinberg::Vst::EditController* ctrl, const std::string& name, int w, int h) {
-        if (getenv("GDK_BACKEND") == nullptr) {
-            setenv("GDK_BACKEND", "x11", 0);
-        }
+        setenv("GDK_BACKEND", "x11", 1);
+        gdk_set_allowed_backends("x11");
         if (!gtk_init_check(nullptr, nullptr)) return false;
         parentWindow = parentX11;
         controller = ctrl;
@@ -1131,6 +1134,8 @@ public:
     }
 
     tresult PLUGIN_API attached(void* parent, FIDString type) override {
+        fprintf(stderr, "[vst3_flutter] EmbeddedFlutterView::attached: parent=%p, type='%s', hasFlutter=%d\n",
+                parent, type ? type : "", hasFlutter_ ? 1 : 0);
         if (!parent || !type) return kInvalidArgument;
         parentView_ = parent;
 #if defined(_WIN32)
@@ -1164,6 +1169,7 @@ public:
     }
 
     tresult PLUGIN_API removed() override {
+        fprintf(stderr, "[vst3_flutter] EmbeddedFlutterView::removed called\n");
         cleanup();
         if (viewHolder_ && *viewHolder_ == this) *viewHolder_ = nullptr;
         return kResultTrue;
@@ -1213,6 +1219,7 @@ public:
 
 private:
     void cleanup() {
+        fprintf(stderr, "[vst3_flutter] cleanup() called, hasFlutter=%d\n", hasFlutter_ ? 1 : 0);
 #if defined(_WIN32)
 #if defined(FLUTTER_VST3_HAS_FLUTTER)
         if (hasFlutter_) {
