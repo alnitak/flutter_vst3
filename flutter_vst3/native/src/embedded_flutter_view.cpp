@@ -629,28 +629,58 @@ struct LinuxFlutterHost {
     void* flDll{nullptr};
     GtkWidget* plug{nullptr};
     FlView* flView{nullptr};
+    guint idleSourceId{0};
+    void* parentWindow{nullptr};
+    int width{600};
+    int height{650};
 
     bool init(void* parentX11, int w, int h) {
         if (!gtk_init_check(nullptr, nullptr)) return false;
-        flDll = dlopen("libflutter_linux_gtk.so", RTLD_LAZY);
-        if (!flDll) return false;
+        parentWindow = parentX11;
+        width = w;
+        height = h;
 
-        auto fnProjectNew = (FlDartProject* (*)())dlsym(flDll, "fl_dart_project_new");
-        auto fnViewNew = (FlView* (*)(FlDartProject*))dlsym(flDll, "fl_view_new");
-        if (!fnProjectNew || !fnViewNew) return false;
-
-        FlDartProject* proj = fnProjectNew();
-        flView = fnViewNew(proj);
-        plug = gtk_plug_new((Window)(uintptr_t)parentX11);
-        gtk_widget_set_size_request(plug, w, h);
-        gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(flView));
-        gtk_widget_show_all(plug);
+        // Post-mount via GTK idle source so it executes on the GTK main loop
+        // AFTER the Dart FFI call (openEditorWindow) has returned to the event loop.
+        idleSourceId = g_idle_add(+[](gpointer data) -> gboolean {
+            auto* self = static_cast<LinuxFlutterHost*>(data);
+            self->idleSourceId = 0;
+            self->mount();
+            return G_SOURCE_REMOVE;
+        }, this);
         return true;
     }
 
+    void mount() {
+        if (!parentWindow) return;
+        flDll = dlopen("libflutter_linux_gtk.so", RTLD_LAZY);
+        if (!flDll) return;
+
+        auto fnProjectNew = (FlDartProject* (*)())dlsym(flDll, "fl_dart_project_new");
+        auto fnViewNew = (FlView* (*)(FlDartProject*))dlsym(flDll, "fl_view_new");
+        if (!fnProjectNew || !fnViewNew) return;
+
+        FlDartProject* proj = fnProjectNew();
+        auto fnSetImpeller = (void (*)(FlDartProject*, gboolean))dlsym(flDll, "fl_dart_project_set_enable_impeller");
+        if (fnSetImpeller) {
+            fnSetImpeller(proj, FALSE);
+        }
+
+        flView = fnViewNew(proj);
+        plug = gtk_plug_new((Window)(uintptr_t)parentWindow);
+        gtk_widget_set_size_request(plug, width, height);
+        gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(flView));
+        gtk_widget_show_all(plug);
+    }
+
     void shutdown() {
+        if (idleSourceId != 0) {
+            g_source_remove(idleSourceId);
+            idleSourceId = 0;
+        }
         if (plug) { gtk_widget_destroy(plug); plug = nullptr; flView = nullptr; }
         if (flDll) { dlclose(flDll); flDll = nullptr; }
+        parentWindow = nullptr;
     }
 };
 #endif
