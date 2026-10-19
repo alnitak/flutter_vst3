@@ -28,7 +28,7 @@ function(add_dart_vst3_plugin target_name dart_file)
     if(NOT DEFINED ENV{VST3_SDK_DIR})
         set(VST3_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../vst3sdk)
     else()
-        set(VST3_SDK_DIR $ENV{VST3_SDK_DIR})
+        file(TO_CMAKE_PATH "$ENV{VST3_SDK_DIR}" VST3_SDK_DIR)
     endif()
 
     if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
@@ -44,6 +44,7 @@ function(add_dart_vst3_plugin target_name dart_file)
     set(SMTG_ADD_VST3_HOSTING_SAMPLES OFF CACHE BOOL "" FORCE)
     set(SMTG_ADD_VSTGUI OFF CACHE BOOL "" FORCE)
     set(SMTG_CREATE_VST3_LINK OFF CACHE BOOL "" FORCE)
+    set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "" FORCE)
     
     # Only build the minimal SDK components needed
     set(SMTG_BUILD_UNIVERSAL_BINARY OFF CACHE BOOL "" FORCE)
@@ -72,7 +73,7 @@ function(add_dart_vst3_plugin target_name dart_file)
     # Auto-generate C++ files from JSON metadata
     
     # Find Dart compiler for code generation and native executable compilation
-    find_program(DART_EXECUTABLE dart)
+    find_program(DART_EXECUTABLE NAMES dart.bat dart.exe dart)
     if(NOT DART_EXECUTABLE)
         message(FATAL_ERROR "Dart compiler is required for code generation and native executable compilation")
     endif()
@@ -248,6 +249,33 @@ function(add_dart_vst3_plugin target_name dart_file)
             ${PLUGIN_LINK_LIBRARIES}
     )
     
+    if(SMTG_WIN)
+        target_link_libraries(${target_name} PRIVATE comctl32)
+        set(FLUTTER_EPHEMERAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/windows/flutter/ephemeral")
+        if(EXISTS "${FLUTTER_EPHEMERAL_DIR}/flutter_windows.h")
+            message(STATUS "Configuring Flutter Windows UI embedding for ${target_name}...")
+            target_include_directories(${target_name} PRIVATE
+                "${FLUTTER_EPHEMERAL_DIR}"
+                "${FLUTTER_EPHEMERAL_DIR}/cpp_client_wrapper"
+                "${FLUTTER_EPHEMERAL_DIR}/cpp_client_wrapper/include"
+            )
+            target_sources(${target_name} PRIVATE
+                "${FLUTTER_EPHEMERAL_DIR}/cpp_client_wrapper/core_implementations.cc"
+                "${FLUTTER_EPHEMERAL_DIR}/cpp_client_wrapper/standard_codec.cc"
+            )
+            target_link_libraries(${target_name} PRIVATE
+                "${FLUTTER_EPHEMERAL_DIR}/flutter_windows.dll.lib"
+                delayimp
+            )
+            target_link_options(${target_name} PRIVATE
+                "/DELAYLOAD:flutter_windows.dll"
+            )
+            target_compile_definitions(${target_name} PRIVATE
+                FLUTTER_VST3_HAS_FLUTTER=1
+            )
+        endif()
+    endif()
+    
     # Link macOS frameworks for embedded views
     if(SMTG_MAC)
         find_library(FOUNDATION_FRAMEWORK Foundation)
@@ -344,16 +372,33 @@ function(add_dart_vst3_plugin target_name dart_file)
             COMMENT "Finalizing and codesigning VST3 bundle"
         )
     elseif(SMTG_WIN)
-        set(FLUTTER_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows/x64/runner/Debug")
+        get_target_property(PLUGIN_PACKAGE_PATH ${target_name} SMTG_PLUGIN_PACKAGE_PATH)
+        set(BUNDLE_COMMANDS)
+        if(EXISTS ${DART_PROCESSOR_EXE})
+            list(APPEND BUNDLE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DART_PROCESSOR_EXE}"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-win/${target_name}_processor.exe"
+            )
+        endif()
+        set(FLUTTER_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows/x64/runner/Release")
+        if(NOT EXISTS "${FLUTTER_WIN_DIR}/flutter_windows.dll")
+            set(FLUTTER_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/windows/x64/runner/Debug")
+        endif()
         if(EXISTS "${FLUTTER_WIN_DIR}/flutter_windows.dll")
-            add_custom_command(TARGET ${target_name} POST_BUILD
+            list(APPEND BUNDLE_COMMANDS
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${FLUTTER_WIN_DIR}/flutter_windows.dll"
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-win/flutter_windows.dll"
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                         "${FLUTTER_WIN_DIR}/data"
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-win/data"
-                COMMENT "Bundling Flutter Windows DLL and assets into VST3 package"
+            )
+        endif()
+        if(BUNDLE_COMMANDS)
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                ${BUNDLE_COMMANDS}
+                COMMENT "Bundling Dart processor and Flutter Windows assets into VST3 package"
             )
         endif()
     elseif(SMTG_LINUX)

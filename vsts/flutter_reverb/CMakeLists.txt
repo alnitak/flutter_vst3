@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(flutter_reverb_plugin 
     VERSION 1.0.0
-    LANGUAGES C CXX OBJC OBJCXX)
+    LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJC OBJCXX)
+endif()
 
 # Build the Flutter Reverb VST® 3 plugin using flutter_vst3
 # This plugin uses pure Dart audio processing with Flutter UI via FFI bridge

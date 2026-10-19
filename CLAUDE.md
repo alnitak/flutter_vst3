@@ -63,7 +63,8 @@ The audio graph supports:
 
 **Setup (First time):**
 ```bash
-./setup.sh  # Downloads Steinberg VST® 3 SDK and builds native library automatically
+./setup.sh   # macOS/Linux: Downloads Steinberg VST® 3 SDK and builds native library automatically
+.\setup.ps1  # Windows (or setup.bat)
 ```
 
 **Primary build targets using Makefile:**

@@ -10,9 +10,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Use the properly downloaded VST3 SDK
 if(NOT DEFINED ENV{VST3_SDK_DIR})
-  set(VST3_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vst3sdk)
+  set(VST3_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../vst3sdk)
 else()
-  set(VST3_SDK_DIR $ENV{VST3_SDK_DIR})
+  file(TO_CMAKE_PATH "$ENV{VST3_SDK_DIR}" VST3_SDK_DIR)
 endif()
 
 if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)

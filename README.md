@@ -153,16 +153,21 @@ sequenceDiagram
 ### Prerequisites
 
 ```bash
-# Download Steinberg VST® 3 SDK
-./setup.sh  # Automatically downloads SDK and builds native libraries
+# macOS / Linux: Download Steinberg VST® 3 SDK & build native libraries
+./setup.sh
 
-# Or manually set VST3_SDK_DIR
-export VST3_SDK_DIR=/path/to/vst3sdk
+# Windows (Command Prompt or PowerShell):
+.\setup.bat   # or .\setup.ps1
 ```
+
+> [!TIP]
+> If running `.ps1` scripts in PowerShell gives an execution policy error, simply run `.\setup.bat` and `.\build.bat`, or allow local scripts once via `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ### Building Your First VST® Plugin
 
 1. **Build the example plugins:**
+
+**macOS / Linux:**
 ```bash
 # Build Flutter Reverb VST® 3 (default)
 make
@@ -175,9 +180,31 @@ make echo-vst         # Build echo.vst3
 make install
 ```
 
+**Windows (PowerShell or Command Prompt):**
+```cmd
+:: Build Flutter Reverb VST® 3 (default)
+./build.bat
+
+:: Build specific plugins:
+./build.bat reverb
+./build.bat echo
+
+:: Build native libraries only (dart_vst_host & dart_vst_graph)
+./build.bat native
+
+:: Install plugins to user VST3 folder (%LOCALAPPDATA%\Programs\Common\VST3\)
+.\build.bat install
+
+:: Clean build artifacts
+.\build.bat clean
+```
+
+> [!NOTE]
+> `.\build.bat install` copies plugins to the standard user directory `C:\Users\<user>\AppData\Local\Programs\Common\VST3\`. It does not require Administrator privileges.
+
 2. **Test in your DAW:**
 - macOS: `~/Library/Audio/Plug-Ins/VST3/`
-- Windows: `C:\Program Files\Common Files\VST3\`
+- Windows: `C:\Users\<user>\AppData\Local\Programs\Common\VST3\`
 - Linux: `~/.vst3/`
 
 ### Creating Your Own VST® Plugin
@@ -349,7 +376,8 @@ The framework provides automatic 3-way parameter binding:
 
 ```bash
 # Run all tests
-make test
+make test             # macOS / Linux
+build.bat test        # Windows (or .\build.ps1 test)
 
 # Test individual packages
 cd flutter_vst3 && dart test

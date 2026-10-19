@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'ui/echo_ui.dart';
 
 /// Entry point for the Echo plugin Flutter GUI.
-void main() {
+@pragma('vm:entry-point')
+void echoMain() {
+  debugPrint('=== [Echo VST3] echoMain launched ===');
   runApp(const EchoApp());
 }
+
+void main() => echoMain();
+
 
 /// Root widget for the Echo plugin UI.
 class EchoApp extends StatelessWidget {

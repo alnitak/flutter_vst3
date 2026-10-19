@@ -30,6 +30,9 @@ echo-flutter:
 	elif [ "$$(uname)" = "Linux" ]; then \
 		echo "Building Flutter Linux bundle for Echo..."; \
 		cd vsts/echo && flutter build linux; \
+	elif echo "$$(uname)" | grep -qiE "mingw|msys|cygwin"; then \
+		echo "Building Flutter Windows bundle for Echo..."; \
+		cd vsts/echo && flutter build windows --debug; \
 	fi
 
 # Build the Echo VST® 3 plugin  
@@ -169,6 +172,14 @@ install: reverb-vst echo-vst
 		cp -r vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 ~/.vst3/; \
 		cp -r vsts/echo/build/VST3/Release/echo.vst3 ~/.vst3/; \
 		echo "✅ Installed to ~/.vst3/"; \
+	elif echo "$$(uname)" | grep -qiE "mingw|msys|cygwin"; then \
+		vst3_dest="$${LOCALAPPDATA:-$$HOME/AppData/Local}/Programs/Common/VST3"; \
+		mkdir -p "$$vst3_dest"; \
+		rm -rf "$$vst3_dest/flutter_reverb.vst3"; \
+		rm -rf "$$vst3_dest/echo.vst3"; \
+		cp -r vsts/flutter_reverb/build/VST3/Release/flutter_reverb.vst3 "$$vst3_dest/"; \
+		cp -r vsts/echo/build/VST3/Release/echo.vst3 "$$vst3_dest/"; \
+		echo "✅ Installed to $$vst3_dest/"; \
 	else \
 		echo "⚠️  Manual installation required on this platform"; \
 	fi

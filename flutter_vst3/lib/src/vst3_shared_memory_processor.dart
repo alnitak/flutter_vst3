@@ -45,9 +45,6 @@ typedef _SemCloseC = Int32 Function(Pointer<Void>);
 typedef _SemCloseDart = int Function(Pointer<Void>);
 
 /// POSIX FFI bindings for inter-process shared memory and semaphores.
-///
-/// Resolves symbols dynamically from the process image via
-/// [DynamicLibrary.process] without external C library dependencies.
 final class _PosixNative {
   final _ShmOpenDart shmOpen;
   final _MmapDart mmap;
@@ -69,18 +66,189 @@ final class _PosixNative {
         semClose = lib.lookupFunction<_SemCloseC, _SemCloseDart>('sem_close');
 }
 
+/// Generic IPC interface unifying Win32 and POSIX shared memory implementations.
+abstract interface class _Vst3Ipc {
+  Pointer<Void> get pointer;
+  void waitReady();
+  void signalDone();
+  void dispose();
+}
+
+final class _PosixIpc implements _Vst3Ipc {
+  final Pointer<Void> _ptr;
+  final int _fd;
+  final Pointer<Void> _semReady;
+  final Pointer<Void> _semDone;
+  final _PosixNative _native;
+
+  _PosixIpc(this._ptr, this._fd, this._semReady, this._semDone, this._native);
+
+  @override
+  Pointer<Void> get pointer => _ptr;
+
+  @override
+  void waitReady() => _native.semWait(_semReady);
+
+  @override
+  void signalDone() => _native.semPost(_semDone);
+
+  @override
+  void dispose() {
+    _native.semClose(_semReady);
+    _native.semClose(_semDone);
+    _native.munmap(_ptr, _vst3ShmTotalSize);
+    _native.close(_fd);
+  }
+}
+
+final class _Win32Ipc implements _Vst3Ipc {
+  final Pointer<Void> _hMap;
+  final Pointer<Void> _ptr;
+  final Pointer<Void> _hSemReady;
+  final Pointer<Void> _hSemDone;
+
+  final int Function(Pointer<Void>, int) _waitForSingleObject;
+  final int Function(Pointer<Void>, int, Pointer<Int32>) _releaseSemaphore;
+  final int Function(Pointer<Void>) _unmapViewOfFile;
+  final int Function(Pointer<Void>) _closeHandle;
+
+  _Win32Ipc({
+    required Pointer<Void> hMap,
+    required Pointer<Void> ptr,
+    required Pointer<Void> hSemReady,
+    required Pointer<Void> hSemDone,
+    required int Function(Pointer<Void>, int) waitForSingleObject,
+    required int Function(Pointer<Void>, int, Pointer<Int32>) releaseSemaphore,
+    required int Function(Pointer<Void>) unmapViewOfFile,
+    required int Function(Pointer<Void>) closeHandle,
+  })  : _hMap = hMap,
+        _ptr = ptr,
+        _hSemReady = hSemReady,
+        _hSemDone = hSemDone,
+        _waitForSingleObject = waitForSingleObject,
+        _releaseSemaphore = releaseSemaphore,
+        _unmapViewOfFile = unmapViewOfFile,
+        _closeHandle = closeHandle;
+
+  @override
+  Pointer<Void> get pointer => _ptr;
+
+  @override
+  void waitReady() {
+    _waitForSingleObject(_hSemReady, 0xFFFFFFFF); // INFINITE
+  }
+
+  @override
+  void signalDone() {
+    _releaseSemaphore(_hSemDone, 1, nullptr);
+  }
+
+  @override
+  void dispose() {
+    _unmapViewOfFile(_ptr);
+    _closeHandle(_hMap);
+    _closeHandle(_hSemReady);
+    _closeHandle(_hSemDone);
+  }
+}
+
+_PosixIpc _openPosixIpc(String shmName, String semReadyName, String semDoneName) {
+  final posix = _PosixNative(DynamicLibrary.process());
+  final shmNameNative = shmName.toNativeUtf8();
+  final semRNameNative = semReadyName.toNativeUtf8();
+  final semDNameNative = semDoneName.toNativeUtf8();
+
+  try {
+    final fd = posix.shmOpen(shmNameNative, 2, 0); // O_RDWR = 2
+    if (fd < 0) throw StateError('Failed to open shared memory: $shmName');
+
+    final ptr = posix.mmap(nullptr, _vst3ShmTotalSize, 3, 1, fd, 0);
+    if (ptr == nullptr) {
+      posix.close(fd);
+      throw StateError('Failed to mmap shared memory: $shmName');
+    }
+
+    final semReady = posix.semOpen(semRNameNative, 0);
+    final semDone = posix.semOpen(semDNameNative, 0);
+
+    return _PosixIpc(ptr, fd, semReady, semDone, posix);
+  } finally {
+    calloc.free(shmNameNative);
+    calloc.free(semRNameNative);
+    calloc.free(semDNameNative);
+  }
+}
+
+_Win32Ipc _openWin32Ipc(String shmName, String semReadyName, String semDoneName) {
+  final k32 = DynamicLibrary.open('kernel32.dll');
+  final openFileMapping = k32.lookupFunction<
+      Pointer<Void> Function(Uint32, Int32, Pointer<Utf8>),
+      Pointer<Void> Function(int, int, Pointer<Utf8>)>('OpenFileMappingA');
+  final mapViewOfFile = k32.lookupFunction<
+      Pointer<Void> Function(Pointer<Void>, Uint32, Uint32, Uint32, IntPtr),
+      Pointer<Void> Function(Pointer<Void>, int, int, int, int)>('MapViewOfFile');
+  final unmapViewOfFile = k32.lookupFunction<
+      Int32 Function(Pointer<Void>),
+      int Function(Pointer<Void>)>('UnmapViewOfFile');
+  final closeHandle = k32.lookupFunction<
+      Int32 Function(Pointer<Void>),
+      int Function(Pointer<Void>)>('CloseHandle');
+  final openSemaphore = k32.lookupFunction<
+      Pointer<Void> Function(Uint32, Int32, Pointer<Utf8>),
+      Pointer<Void> Function(int, int, Pointer<Utf8>)>('OpenSemaphoreA');
+  final waitForSingleObject = k32.lookupFunction<
+      Uint32 Function(Pointer<Void>, Uint32),
+      int Function(Pointer<Void>, int)>('WaitForSingleObject');
+  final releaseSemaphore = k32.lookupFunction<
+      Int32 Function(Pointer<Void>, Int32, Pointer<Int32>),
+      int Function(Pointer<Void>, int, Pointer<Int32>)>('ReleaseSemaphore');
+
+  final shmUtf8 = shmName.toNativeUtf8();
+  final semRUtf8 = semReadyName.toNativeUtf8();
+  final semDUtf8 = semDoneName.toNativeUtf8();
+
+  try {
+    final hMap = openFileMapping(0x000F001F, 0, shmUtf8); // FILE_MAP_ALL_ACCESS
+    if (hMap == nullptr) {
+      throw StateError('Failed to open Win32 shared memory: $shmName');
+    }
+    final ptr = mapViewOfFile(hMap, 0x000F001F, 0, 0, _vst3ShmTotalSize);
+    if (ptr == nullptr) {
+      closeHandle(hMap);
+      throw StateError('Failed to map Win32 shared memory: $shmName');
+    }
+    final hReady = openSemaphore(0x001F0003, 0, semRUtf8); // SEMAPHORE_ALL_ACCESS
+    if (hReady == nullptr) {
+      unmapViewOfFile(ptr);
+      closeHandle(hMap);
+      throw StateError('Failed to open Win32 semaphore: $semReadyName');
+    }
+    final hDone = openSemaphore(0x001F0003, 0, semDUtf8);
+    if (hDone == nullptr) {
+      closeHandle(hReady);
+      unmapViewOfFile(ptr);
+      closeHandle(hMap);
+      throw StateError('Failed to open Win32 semaphore: $semDoneName');
+    }
+
+    return _Win32Ipc(
+      hMap: hMap,
+      ptr: ptr,
+      hSemReady: hReady,
+      hSemDone: hDone,
+      waitForSingleObject: waitForSingleObject,
+      releaseSemaphore: releaseSemaphore,
+      unmapViewOfFile: unmapViewOfFile,
+      closeHandle: closeHandle,
+    );
+  } finally {
+    calloc.free(shmUtf8);
+    calloc.free(semRUtf8);
+    calloc.free(semDUtf8);
+  }
+}
+
 /// Runs a VST3 audio processor using preallocated zero-copy shared memory.
-///
-/// This is the main entry point for compiled Dart VST3 DSP executables.
-/// It parses the shared memory and semaphore names passed via [args] from
-/// the native C++ VST3 wrapper, attaches to the shared memory segment,
-/// and executes the real-time DSP event loop with the provided [processor].
-///
-/// The [processor] object must implement:
-/// - `initialize(double sampleRate, int maxBlockSize)`
-/// - `setParameter(int paramId, double value)`
-/// - `processStereo(List<double> inL, List<double> inR, List<double> outL, List<double> outR)`
-/// - `dispose()`
 void runVst3SharedMemoryProcessor({
   required List<String> args,
   required dynamic processor,
@@ -102,33 +270,17 @@ void _startProcessing(
   String semDoneName,
   dynamic processor,
 ) {
-  final posix = _PosixNative(DynamicLibrary.process());
-  final shmNameNative = shmName.toNativeUtf8();
-  final semRNameNative = semReadyName.toNativeUtf8();
-  final semDNameNative = semDoneName.toNativeUtf8();
+  final _Vst3Ipc ipc = Platform.isWindows
+      ? _openWin32Ipc(shmName, semReadyName, semDoneName)
+      : _openPosixIpc(shmName, semReadyName, semDoneName);
 
-  final fd = posix.shmOpen(shmNameNative, 2, 0); // O_RDWR = 2
-  final ptr = fd >= 0
-      ? posix.mmap(nullptr, _vst3ShmTotalSize, 3, 1, fd, 0)
-      : throw StateError('Failed to open shared memory: $shmName');
-  final semReady = posix.semOpen(semRNameNative, 0);
-  final semDone = posix.semOpen(semDNameNative, 0);
-
-  _cleanupNativeStrings(shmNameNative, semRNameNative, semDNameNative);
-  _validateMagic(ptr);
-  _runEventLoop(posix, ptr, fd, semReady, semDone, processor);
-}
-
-/// Frees temporary native UTF-8 strings allocated for POSIX open calls.
-void _cleanupNativeStrings(Pointer<Utf8> a, Pointer<Utf8> b, Pointer<Utf8> c) {
-  calloc.free(a);
-  calloc.free(b);
-  calloc.free(c);
+  _validateMagic(ipc.pointer);
+  _runEventLoop(ipc, processor);
 }
 
 /// Verifies that the shared memory block contains the expected VST3 magic word.
 void _validateMagic(Pointer<Void> ptr) {
-  final magic = (ptr.cast<Uint8>() + _offsetMagic).cast<Uint32>().value;
+  final magic = Pointer<Uint32>.fromAddress(ptr.address + _offsetMagic).value;
   switch (magic == _vst3ShmMagic) {
     case true:
       return;
@@ -138,88 +290,68 @@ void _validateMagic(Pointer<Void> ptr) {
 }
 
 /// Performs initialization handshake with host, enters DSP loop, and cleans up.
-void _runEventLoop(
-  _PosixNative posix,
-  Pointer<Void> ptr,
-  int fd,
-  Pointer<Void> semReady,
-  Pointer<Void> semDone,
-  dynamic processor,
-) {
-  final bytePtr = ptr.cast<Uint8>();
-  final sampleRate = (bytePtr + _offsetSampleRate).cast<Double>().value;
-  final maxBlockSize = (bytePtr + _offsetMaxBlockSize).cast<Uint32>().value;
+void _runEventLoop(_Vst3Ipc ipc, dynamic processor) {
+  final ptr = ipc.pointer;
+  final sampleRate = Pointer<Double>.fromAddress(ptr.address + _offsetSampleRate).value;
+  final maxBlockSize = Pointer<Uint32>.fromAddress(ptr.address + _offsetMaxBlockSize).value;
   processor.initialize(sampleRate, maxBlockSize);
-  posix.semPost(semDone); // Signal C++ host that initialization is complete
+  ipc.signalDone(); // Signal C++ host that initialization is complete
 
-  _processingLoop(posix, bytePtr, semReady, semDone, processor);
-  _dispose(posix, ptr, fd, semReady, semDone, processor);
+  _processingLoop(ipc, processor);
+  _dispose(ipc, processor);
 }
 
 /// Core audio processing loop waiting on semReady and signaling semDone.
-void _processingLoop(
-  _PosixNative posix,
-  Pointer<Uint8> bytePtr,
-  Pointer<Void> semReady,
-  Pointer<Void> semDone,
-  dynamic processor,
-) {
+void _processingLoop(_Vst3Ipc ipc, dynamic processor) {
+  final ptr = ipc.pointer;
   var running = true;
   while (running) {
-    posix.semWait(semReady);
-    final cmd = (bytePtr + _offsetCommand).cast<Uint32>().value;
+    ipc.waitReady();
+    final cmd = Pointer<Uint32>.fromAddress(ptr.address + _offsetCommand).value;
     switch (cmd) {
       case _vst3CmdProcess:
-        _handleProcessBlock(bytePtr, processor);
-        posix.semPost(semDone);
+        _handleProcessBlock(ptr, processor);
+        ipc.signalDone();
+        break;
       case _vst3CmdTerminate:
         running = false;
+        break;
       default:
-        posix.semPost(semDone);
+        ipc.signalDone();
+        break;
     }
   }
 }
 
 /// Drains parameters from the ring buffer and processes stereo audio in-place.
-void _handleProcessBlock(Pointer<Uint8> bytePtr, dynamic processor) {
-  _drainParameters(bytePtr, processor);
-  final numSamples = (bytePtr + _offsetNumSamples).cast<Int32>().value;
-  final inL = (bytePtr + _offsetInputL).cast<Float>().asTypedList(numSamples);
-  final inR = (bytePtr + _offsetInputR).cast<Float>().asTypedList(numSamples);
-  final outL = (bytePtr + _offsetOutputL).cast<Float>().asTypedList(numSamples);
-  final outR = (bytePtr + _offsetOutputR).cast<Float>().asTypedList(numSamples);
+void _handleProcessBlock(Pointer<Void> ptr, dynamic processor) {
+  _drainParameters(ptr, processor);
+  final numSamples = Pointer<Int32>.fromAddress(ptr.address + _offsetNumSamples).value;
+  final inL = Pointer<Float>.fromAddress(ptr.address + _offsetInputL).asTypedList(numSamples);
+  final inR = Pointer<Float>.fromAddress(ptr.address + _offsetInputR).asTypedList(numSamples);
+  final outL = Pointer<Float>.fromAddress(ptr.address + _offsetOutputL).asTypedList(numSamples);
+  final outR = Pointer<Float>.fromAddress(ptr.address + _offsetOutputR).asTypedList(numSamples);
   processor.processStereo(inL, inR, outL, outR);
 }
 
 /// Drains pending parameter automation events from the host lock-free ring buffer.
-void _drainParameters(Pointer<Uint8> bytePtr, dynamic processor) {
-  final writeIdx = (bytePtr + _offsetHostParamWrite).cast<Uint32>().value;
-  var readIdx = (bytePtr + _offsetHostParamRead).cast<Uint32>().value;
+void _drainParameters(Pointer<Void> ptr, dynamic processor) {
+  final writeIdx = Pointer<Uint32>.fromAddress(ptr.address + _offsetHostParamWrite).value;
+  var readIdx = Pointer<Uint32>.fromAddress(ptr.address + _offsetHostParamRead).value;
 
   while (readIdx != writeIdx) {
     final eventOffset = _offsetHostParams + ((readIdx % 64) * 16);
-    final paramId = (bytePtr + eventOffset).cast<Int32>().value;
-    final value = (bytePtr + eventOffset + 8).cast<Double>().value;
+    final paramId = Pointer<Int32>.fromAddress(ptr.address + eventOffset).value;
+    final value = Pointer<Double>.fromAddress(ptr.address + eventOffset + 8).value;
     processor.setParameter(paramId, value);
     readIdx++;
   }
-  (bytePtr + _offsetHostParamRead).cast<Uint32>().value = readIdx;
+  Pointer<Uint32>.fromAddress(ptr.address + _offsetHostParamRead).value = readIdx;
 }
 
 /// Cleans up shared memory mappings, closes semaphores, and exits process.
-void _dispose(
-  _PosixNative posix,
-  Pointer<Void> ptr,
-  int fd,
-  Pointer<Void> semReady,
-  Pointer<Void> semDone,
-  dynamic processor,
-) {
+void _dispose(_Vst3Ipc ipc, dynamic processor) {
   processor.dispose();
-  posix.semClose(semReady);
-  posix.semClose(semDone);
-  posix.munmap(ptr, _vst3ShmTotalSize);
-  posix.close(fd);
+  ipc.dispose();
   exit(0);
 }
-

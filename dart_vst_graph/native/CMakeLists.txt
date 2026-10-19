@@ -10,9 +10,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Use the properly downloaded VST3 SDK
 if(NOT DEFINED ENV{VST3_SDK_DIR})
-  set(VST3_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../vst3sdk)
+  set(VST3_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../vst3sdk)
 else()
-  set(VST3_SDK_DIR $ENV{VST3_SDK_DIR})
+  file(TO_CMAKE_PATH "$ENV{VST3_SDK_DIR}" VST3_SDK_DIR)
 endif()
 
 if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
@@ -95,8 +95,17 @@ target_compile_definitions(dart_vst_graph PRIVATE
 )
 
 # Link dart_vst_host library
-set(DART_VST_HOST_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../../dart_vst_host/native/build/libdart_vst_host.dylib")
-if(EXISTS ${DART_VST_HOST_LIB})
+find_library(DART_VST_HOST_LIB
+  NAMES dart_vst_host libdart_vst_host
+  PATHS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../dart_vst_host/native/build/Release"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../dart_vst_host/native/build/Debug"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../dart_vst_host/native/build"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../dart_vst_host"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+  NO_DEFAULT_PATH
+)
+if(DART_VST_HOST_LIB)
   target_link_libraries(dart_vst_graph ${DART_VST_HOST_LIB})
 endif()
 
