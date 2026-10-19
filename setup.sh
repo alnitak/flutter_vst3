@@ -43,6 +43,7 @@ if [ ! -d vst3sdk ]; then
         rm -rf VST_SDK
     fi
     rm -f vst3sdk.zip
+    find vst3sdk -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
     echo 'VST3 SDK downloaded and extracted.'
 else
     echo 'VST3 SDK already exists, skipping download.'

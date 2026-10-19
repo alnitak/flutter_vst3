@@ -286,6 +286,10 @@ function(add_dart_vst3_plugin target_name dart_file)
         if(FLUTTER_FRAMEWORK)
             target_link_libraries(${target_name} PRIVATE ${FLUTTER_FRAMEWORK})
         endif()
+    elseif(SMTG_LINUX)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0 gtk+-x11-3.0)
+        target_link_libraries(${target_name} PRIVATE PkgConfig::GTK ${CMAKE_DL_LIBS})
     endif()
 
     # Set bundle properties on macOS
