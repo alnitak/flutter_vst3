@@ -628,13 +628,15 @@ private:
 
 struct LinuxFlutterHost {
     GtkWidget* plug{nullptr};
-    FlView* flView{nullptr};
-    FlMethodChannel* channel{nullptr};
-    Steinberg::Vst::EditController* controller{nullptr};
     guint idleSourceId{0};
     void* parentWindow{nullptr};
     int width{600};
     int height{650};
+    bool mounted{false};
+
+    static inline FlView* sSharedView{nullptr};
+    static inline FlMethodChannel* sSharedChannel{nullptr};
+    static inline Steinberg::Vst::EditController* sActiveController{nullptr};
 
     static std::string getModuleDirectory() {
         Dl_info info;
@@ -662,37 +664,47 @@ struct LinuxFlutterHost {
         }
         if (!gtk_init_check(nullptr, nullptr)) return false;
         parentWindow = parentX11;
-        controller = ctrl;
         width = w;
         height = h;
+        mounted = false;
+        sActiveController = ctrl;
 
-        mount();
+        // Post-mount via GLib timeout so it executes on the platform thread
+        // AFTER the host Dart FFI call (openEditorWindow) has returned to the event loop.
+        // This avoids Dart VM asserting "CreateIsolate expects there to be no current isolate"
+        // when the second Flutter engine spins up its isolate.
+        idleSourceId = g_timeout_add(50, +[](gpointer data) -> gboolean {
+            auto* self = static_cast<LinuxFlutterHost*>(data);
+            self->idleSourceId = 0;
+            self->mount();
+            return G_SOURCE_REMOVE;
+        }, this);
         return true;
     }
 
     static void onMethodCall(FlMethodChannel* ch, FlMethodCall* methodCall, gpointer userData) {
-        auto* self = static_cast<LinuxFlutterHost*>(userData);
         const gchar* name = fl_method_call_get_name(methodCall);
         FlValue* args = fl_method_call_get_args(methodCall);
+        auto* ctrl = sActiveController;
 
         if (g_strcmp0(name, "getInitialParameters") == 0) {
             g_autoptr(FlValue) map = fl_value_new_map();
-            if (self->controller) {
-                int count = self->controller->getParameterCount();
+            if (ctrl) {
+                int count = ctrl->getParameterCount();
                 for (int i = 0; i < count; ++i) {
                     Steinberg::Vst::ParameterInfo info{};
-                    if (self->controller->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                    if (ctrl->getParameterInfo(i, info) == Steinberg::kResultTrue) {
                         g_autofree gchar* key = g_strdup_printf("%u", info.id);
                         fl_value_set_string_take(
                             map, key,
-                            fl_value_new_float(self->controller->getParamNormalized(info.id)));
+                            fl_value_new_float(ctrl->getParamNormalized(info.id)));
                     }
                 }
             }
             g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_success_response_new(map));
             fl_method_call_respond(methodCall, resp, nullptr);
         } else if (g_strcmp0(name, "setParameter") == 0) {
-            if (self->controller && args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
+            if (ctrl && args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
                 FlValue* idVal = fl_value_lookup_string(args, "id");
                 FlValue* valVal = fl_value_lookup_string(args, "value");
                 if (idVal && valVal) {
@@ -702,10 +714,10 @@ struct LinuxFlutterHost {
                     double val = (fl_value_get_type(valVal) == FL_VALUE_TYPE_FLOAT)
                         ? fl_value_get_float(valVal)
                         : static_cast<double>(fl_value_get_int(valVal));
-                    self->controller->beginEdit(pid);
-                    self->controller->setParamNormalized(pid, val);
-                    self->controller->performEdit(pid, val);
-                    self->controller->endEdit(pid);
+                    ctrl->beginEdit(pid);
+                    ctrl->setParamNormalized(pid, val);
+                    ctrl->performEdit(pid, val);
+                    ctrl->endEdit(pid);
                 }
             }
             g_autoptr(FlValue) ret = fl_value_new_bool(TRUE);
@@ -728,7 +740,8 @@ struct LinuxFlutterHost {
     }
 
     void mount() {
-        if (!parentWindow) return;
+        if (mounted || !parentWindow) return;
+        mounted = true;
 
         plug = gtk_plug_new((Window)(uintptr_t)parentWindow);
         if (!plug) {
@@ -737,16 +750,36 @@ struct LinuxFlutterHost {
         }
         gtk_widget_set_size_request(plug, width, height);
 
-        std::string modDir = getModuleDirectory();
-        std::string assetsPath = modDir + "/data/flutter_assets";
-        std::string icuPath = modDir + "/data/icudtl.dat";
+        if (!sSharedView) {
+            std::string modDir = getModuleDirectory();
+            std::string assetsPath = modDir + "/data/flutter_assets";
+            std::string icuPath = modDir + "/data/icudtl.dat";
 
-        FlDartProject* proj = fl_dart_project_new();
-        fl_dart_project_set_assets_path(proj, const_cast<gchar*>(assetsPath.c_str()));
-        fl_dart_project_set_icu_data_path(proj, const_cast<gchar*>(icuPath.c_str()));
+            FlDartProject* proj = fl_dart_project_new();
+            fl_dart_project_set_assets_path(proj, const_cast<gchar*>(assetsPath.c_str()));
+            fl_dart_project_set_icu_data_path(proj, const_cast<gchar*>(icuPath.c_str()));
 
-        flView = fl_view_new(proj);
-        gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(flView));
+            std::string aotPath = modDir + "/lib/libapp.so";
+            struct stat aotSt;
+            if (stat(aotPath.c_str(), &aotSt) == 0) {
+                fl_dart_project_set_aot_library_path(proj, aotPath.c_str());
+            }
+
+            // Disable Impeller on embedded Linux plugin view to prevent OpenGL context
+            // and shader compilation conflicts with the host Flutter engine.
+            fl_dart_project_set_enable_impeller(proj, FALSE);
+
+            sSharedView = fl_view_new(proj);
+            g_object_ref_sink(sSharedView);
+
+            FlEngine* engine = fl_view_get_engine(sSharedView);
+            FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+            g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+            sSharedChannel = fl_method_channel_new(messenger, "flutter_vst3/parameters", FL_METHOD_CODEC(codec));
+            fl_method_channel_set_method_call_handler(sSharedChannel, onMethodCall, nullptr, nullptr);
+        }
+
+        gtk_container_add(GTK_CONTAINER(plug), GTK_WIDGET(sSharedView));
         gtk_widget_show_all(plug);
 
         GdkWindow* plugWin = gtk_widget_get_window(plug);
@@ -760,19 +793,24 @@ struct LinuxFlutterHost {
             }
         }
 
-        FlEngine* engine = fl_view_get_engine(flView);
-        FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
-        g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
-        channel = fl_method_channel_new(messenger, "flutter_vst3/parameters", FL_METHOD_CODEC(codec));
-        fl_method_channel_set_method_call_handler(channel, onMethodCall, this, nullptr);
+        // On reopen, synchronize parameters with the Flutter UI
+        if (sSharedChannel && sActiveController) {
+            int count = sActiveController->getParameterCount();
+            for (int i = 0; i < count; ++i) {
+                Steinberg::Vst::ParameterInfo info{};
+                if (sActiveController->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                    updateParam(info.id, sActiveController->getParamNormalized(info.id));
+                }
+            }
+        }
     }
 
     void updateParam(Steinberg::Vst::ParamID pid, Steinberg::Vst::ParamValue val) {
-        if (!channel) return;
+        if (!sSharedChannel) return;
         g_autoptr(FlValue) args = fl_value_new_map();
         fl_value_set_string_take(args, "id", fl_value_new_int(static_cast<int64_t>(pid)));
         fl_value_set_string_take(args, "value", fl_value_new_float(static_cast<double>(val)));
-        fl_method_channel_invoke_method(channel, "onParameterChanged", args, nullptr, nullptr, nullptr);
+        fl_method_channel_invoke_method(sSharedChannel, "onParameterChanged", args, nullptr, nullptr, nullptr);
     }
 
     void shutdown() {
@@ -780,15 +818,27 @@ struct LinuxFlutterHost {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
         }
-        if (channel) {
-            g_object_unref(channel);
-            channel = nullptr;
+        if (sSharedChannel) {
+            g_object_unref(sSharedChannel);
+            sSharedChannel = nullptr;
+        }
+        if (plug && sSharedView) {
+            GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(sSharedView));
+            if (parent == plug) {
+                gtk_widget_hide(GTK_WIDGET(sSharedView));
+                gtk_container_remove(GTK_CONTAINER(plug), GTK_WIDGET(sSharedView));
+            }
+        }
+        if (sSharedView) {
+            g_object_unref(sSharedView);
+            sSharedView = nullptr;
         }
         if (plug) {
             gtk_widget_destroy(plug);
             plug = nullptr;
-            flView = nullptr;
         }
+        sActiveController = nullptr;
+        mounted = false;
         parentWindow = nullptr;
     }
 };
@@ -1160,7 +1210,6 @@ private:
         linuxNativeHost_.shutdown();
 #endif
         parentView_ = nullptr;
-        hasFlutter_ = false;
     }
 
     EditController* controller_{nullptr};
