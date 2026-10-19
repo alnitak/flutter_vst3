@@ -818,20 +818,12 @@ struct LinuxFlutterHost {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
         }
-        if (sSharedChannel) {
-            g_object_unref(sSharedChannel);
-            sSharedChannel = nullptr;
-        }
         if (plug && sSharedView) {
             GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(sSharedView));
             if (parent == plug) {
                 gtk_widget_hide(GTK_WIDGET(sSharedView));
                 gtk_container_remove(GTK_CONTAINER(plug), GTK_WIDGET(sSharedView));
             }
-        }
-        if (sSharedView) {
-            g_object_unref(sSharedView);
-            sSharedView = nullptr;
         }
         if (plug) {
             gtk_widget_destroy(plug);
