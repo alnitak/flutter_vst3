@@ -146,7 +146,7 @@ sequenceDiagram
 ### Cross-Platform Support
 - ✅ **macOS** - Universal binaries (Intel + Apple Silicon)
 - ✅ **Windows** - Native Windows VST® 3 support
-- ✅ **Linux** - Full Linux VST® 3 support
+- ✅ **Linux** - Full Linux VST® 3 support (X11 desktop backend for GUI; run with `GDK_BACKEND=x11`)
 
 ## Quick Start
 
@@ -206,6 +206,9 @@ make install
 - macOS: `~/Library/Audio/Plug-Ins/VST3/`
 - Windows: `C:\Users\<user>\AppData\Local\Programs\Common\VST3\`
 - Linux: `~/.vst3/`
+
+> [!IMPORTANT]
+> **Linux GUI Requirement**: The standard VST3 windowing backend on Linux uses **X11**. Any application or host running VST3 plugins with a graphical interface on Linux must be launched with the `GDK_BACKEND=x11` environment variable (e.g. `GDK_BACKEND=x11 flutter run`), otherwise the GUI will not be displayed on Wayland desktop sessions.
 
 ### Creating Your Own VST® Plugin
 
@@ -386,7 +389,10 @@ cd dart_vst_host && dart test
 cd dart_vst_graph && dart test
 
 # Interactive testing with example plugins
+# (On Linux, set GDK_BACKEND=x11 so native VST3 GUIs can be displayed)
 cd vsts/flutter_reverb && flutter run
+# On Linux:
+cd vsts/echo && GDK_BACKEND=x11 flutter run
 ```
 
 ## Contributing
