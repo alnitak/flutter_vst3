@@ -47,17 +47,40 @@ class WinFlutterHost {
 public:
     HWND flutterHwnd{nullptr};
     HWND parentHwnd{nullptr};
-    HMODULE flDll{nullptr};
-    FlutterDesktopEngineRef engine{nullptr};
-    FlutterDesktopViewControllerRef vc{nullptr};
-    std::unique_ptr<flutter::BinaryMessengerImpl> binaryMessenger;
-    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel;
     EditController* controller{nullptr};
+    int width{600};
+    int height{650};
 
     UINT_PTR pendingTimerId{0};
     std::atomic<bool> mounted{false};
-    std::atomic<bool> stopRequested{false};
-    std::mutex channelMutex;
+
+    static inline HWND sSharedFlutterHwnd{nullptr};
+    static inline FlutterDesktopViewControllerRef sSharedVc{nullptr};
+    static inline FlutterDesktopEngineRef sSharedEngine{nullptr};
+    static inline std::unique_ptr<flutter::BinaryMessengerImpl> sSharedMessenger;
+    static inline std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> sSharedChannel;
+    static inline HMODULE sFlDll{nullptr};
+    static inline EditController* sActiveController{nullptr};
+    static inline std::mutex sSharedMutex;
+
+    static HWND getHolderHwnd() {
+        static HWND holder = nullptr;
+        if (!holder) {
+            HINSTANCE hInst = GetModuleHandleW(nullptr);
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(WNDCLASSEXW);
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = hInst;
+            wc.lpszClassName = L"FlutterVst3HolderWindow";
+            RegisterClassExW(&wc);
+
+            holder = CreateWindowExW(
+                0, L"FlutterVst3HolderWindow", L"FlutterHolder",
+                WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, hInst, nullptr
+            );
+        }
+        return holder;
+    }
 
     static std::wstring getModuleDirectory() {
         HMODULE hModule = nullptr;
@@ -85,8 +108,10 @@ public:
 
     bool init(HWND parent, EditController* ctrl, int w, int h) {
         controller = ctrl;
+        sActiveController = ctrl;
         parentHwnd = parent;
-        stopRequested = false;
+        width = w;
+        height = h;
         mounted = false;
 
         std::wstring moduleDir = getModuleDirectory();
@@ -99,9 +124,11 @@ public:
             return false;
         }
 
-        SetDllDirectoryW(moduleDir.c_str());
-        flDll = LoadLibraryW(dllPath.c_str());
-        if (!flDll) return false;
+        if (!sFlDll) {
+            SetDllDirectoryW(moduleDir.c_str());
+            sFlDll = LoadLibraryW(dllPath.c_str());
+            if (!sFlDll) return false;
+        }
 
         // Post-mount via thread timer so it executes on the main platform thread
         // AFTER the Dart FFI call (openEditorWindow) has returned to the event loop.
@@ -113,130 +140,148 @@ public:
     }
 
     void mount() {
-        if (mounted.load() || stopRequested.load() || !parentHwnd) return;
+        if (mounted.load() || !parentHwnd) return;
+        mounted = true;
 
-        std::wstring moduleDir = getModuleDirectory();
-        std::wstring assetsPath = moduleDir + L"\\data\\flutter_assets";
-        std::wstring icuPath = moduleDir + L"\\data\\icudtl.dat";
+        std::lock_guard<std::mutex> lock(sSharedMutex);
 
-        FlutterDesktopEngineProperties props{};
-        props.assets_path = assetsPath.c_str();
-        props.icu_data_path = icuPath.c_str();
-        props.dart_entrypoint = "echoMain";
-        props.ui_thread_policy = RunOnPlatformThread;
-        props.impeller_switch = DisabledImpeller;
+        if (!sSharedVc) {
+            std::wstring moduleDir = getModuleDirectory();
+            std::wstring assetsPath = moduleDir + L"\\data\\flutter_assets";
+            std::wstring icuPath = moduleDir + L"\\data\\icudtl.dat";
 
-        engine = FlutterDesktopEngineCreate(&props);
-        if (!engine || stopRequested.load()) {
-            return;
-        }
+            FlutterDesktopEngineProperties props{};
+            props.assets_path = assetsPath.c_str();
+            props.icu_data_path = icuPath.c_str();
+            props.dart_entrypoint = "echoMain";
+            props.ui_thread_policy = RunOnPlatformThread;
+            props.impeller_switch = DisabledImpeller;
 
-        {
-            std::lock_guard<std::mutex> lock(channelMutex);
+            sSharedEngine = FlutterDesktopEngineCreate(&props);
+            if (!sSharedEngine) {
+                mounted = false;
+                return;
+            }
+
             setupMethodChannel();
-        }
 
-        if (!FlutterDesktopEngineRun(engine, "echoMain")) {
-            FlutterDesktopEngineDestroy(engine);
-            engine = nullptr;
-            return;
+            if (!FlutterDesktopEngineRun(sSharedEngine, "echoMain")) {
+                FlutterDesktopEngineDestroy(sSharedEngine);
+                sSharedEngine = nullptr;
+                mounted = false;
+                return;
+            }
+
+            sSharedVc = FlutterDesktopViewControllerCreate(width, height, sSharedEngine);
+            if (!sSharedVc) {
+                sSharedEngine = nullptr;
+                mounted = false;
+                return;
+            }
+
+            FlutterDesktopViewRef view = FlutterDesktopViewControllerGetView(sSharedVc);
+            if (!view) {
+                FlutterDesktopViewControllerDestroy(sSharedVc);
+                sSharedVc = nullptr;
+                sSharedEngine = nullptr;
+                mounted = false;
+                return;
+            }
+
+            sSharedFlutterHwnd = FlutterDesktopViewGetHWND(view);
+            if (!sSharedFlutterHwnd) {
+                FlutterDesktopViewControllerDestroy(sSharedVc);
+                sSharedVc = nullptr;
+                sSharedEngine = nullptr;
+                mounted = false;
+                return;
+            }
+
+            LONG_PTR curStyle = GetWindowLongPtrW(sSharedFlutterHwnd, GWL_STYLE);
+            curStyle = (curStyle & ~WS_POPUP) | WS_CHILD;
+            SetWindowLongPtrW(sSharedFlutterHwnd, GWL_STYLE, curStyle);
         }
 
         RECT rc{};
         GetClientRect(parentHwnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
-        if (w <= 0) w = 600;
-        if (h <= 0) h = 650;
+        if (w <= 0) w = width > 0 ? width : 600;
+        if (h <= 0) h = height > 0 ? height : 650;
 
-        vc = FlutterDesktopViewControllerCreate(w, h, engine);
-        if (!vc || stopRequested.load()) {
-            engine = nullptr;
-            return;
+        flutterHwnd = sSharedFlutterHwnd;
+        SetParent(sSharedFlutterHwnd, parentHwnd);
+        SetWindowPos(sSharedFlutterHwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        ShowWindow(sSharedFlutterHwnd, SW_SHOW);
+        UpdateWindow(sSharedFlutterHwnd);
+        FlutterDesktopViewControllerForceRedraw(sSharedVc);
+
+        // Notify Flutter UI and synchronize parameters (mirroring Linux)
+        if (sSharedChannel) {
+            sSharedChannel->InvokeMethod("onHostAttached", nullptr);
+            if (sActiveController) {
+                int count = sActiveController->getParameterCount();
+                for (int i = 0; i < count; ++i) {
+                    Steinberg::Vst::ParameterInfo info{};
+                    if (sActiveController->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                        updateParam(info.id, sActiveController->getParamNormalized(info.id));
+                    }
+                }
+            }
         }
-
-        FlutterDesktopViewRef view = FlutterDesktopViewControllerGetView(vc);
-        if (!view || stopRequested.load()) {
-            FlutterDesktopViewControllerDestroy(vc);
-            vc = nullptr;
-            engine = nullptr;
-            return;
-        }
-
-        flutterHwnd = FlutterDesktopViewGetHWND(view);
-        if (!flutterHwnd || stopRequested.load()) {
-            FlutterDesktopViewControllerDestroy(vc);
-            vc = nullptr;
-            engine = nullptr;
-            return;
-        }
-
-        LONG_PTR curStyle = GetWindowLongPtrW(flutterHwnd, GWL_STYLE);
-        curStyle = (curStyle & ~WS_POPUP) | WS_CHILD;
-        SetWindowLongPtrW(flutterHwnd, GWL_STYLE, curStyle);
-
-        SetParent(flutterHwnd, parentHwnd);
-        SetWindowPos(flutterHwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-        ShowWindow(flutterHwnd, SW_SHOW);
-        UpdateWindow(flutterHwnd);
-        FlutterDesktopViewControllerForceRedraw(vc);
-
-        mounted = true;
     }
 
     void shutdown() {
-        stopRequested = true;
         if (pendingTimerId != 0) {
             KillTimer(nullptr, pendingTimerId);
             unregisterTimer(pendingTimerId);
             pendingTimerId = 0;
         }
-        if (flutterHwnd) {
-            SetParent(flutterHwnd, nullptr);
-            flutterHwnd = nullptr;
+
+        std::lock_guard<std::mutex> lock(sSharedMutex);
+
+        if (sSharedChannel) {
+            sSharedChannel->InvokeMethod("onHostDetached", nullptr);
         }
-        {
-            std::lock_guard<std::mutex> lock(channelMutex);
-            channel.reset();
-            binaryMessenger.reset();
+
+        if (sSharedFlutterHwnd) {
+            ShowWindow(sSharedFlutterHwnd, SW_HIDE);
+            SetParent(sSharedFlutterHwnd, getHolderHwnd());
         }
-        if (vc) {
-            FlutterDesktopViewControllerDestroy(vc);
-            vc = nullptr;
-            engine = nullptr;
+
+        if (sActiveController == controller) {
+            sActiveController = nullptr;
         }
-        if (flDll) {
-            FreeLibrary(flDll);
-            flDll = nullptr;
-        }
-        mounted = false;
+
+        flutterHwnd = nullptr;
         parentHwnd = nullptr;
+        mounted = false;
     }
 
     void updateParam(Steinberg::Vst::ParamID pid, Steinberg::Vst::ParamValue val) {
-        std::lock_guard<std::mutex> lock(channelMutex);
-        if (!channel) return;
+        std::lock_guard<std::mutex> lock(sSharedMutex);
+        if (!sSharedChannel) return;
         flutter::EncodableMap args;
         args[flutter::EncodableValue("id")] = flutter::EncodableValue(static_cast<int64_t>(pid));
         args[flutter::EncodableValue("value")] = flutter::EncodableValue(static_cast<double>(val));
-        channel->InvokeMethod("onParameterChanged", std::make_unique<flutter::EncodableValue>(args));
+        sSharedChannel->InvokeMethod("onParameterChanged", std::make_unique<flutter::EncodableValue>(args));
     }
 
 private:
     void setupMethodChannel() {
-        FlutterDesktopMessengerRef messenger = FlutterDesktopEngineGetMessenger(engine);
+        FlutterDesktopMessengerRef messenger = FlutterDesktopEngineGetMessenger(sSharedEngine);
         if (!messenger) return;
 
-        binaryMessenger = std::make_unique<flutter::BinaryMessengerImpl>(messenger);
-        channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-            binaryMessenger.get(), "flutter_vst3/parameters",
+        sSharedMessenger = std::make_unique<flutter::BinaryMessengerImpl>(messenger);
+        sSharedChannel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+            sSharedMessenger.get(), "flutter_vst3/parameters",
             &flutter::StandardMethodCodec::GetInstance());
 
-        auto weakCtrl = controller;
-        channel->SetMethodCallHandler(
-            [weakCtrl](const flutter::MethodCall<flutter::EncodableValue>& call,
-                       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-                if (call.method_name() == "setParameter" && weakCtrl) {
+        sSharedChannel->SetMethodCallHandler(
+            [](const flutter::MethodCall<flutter::EncodableValue>& call,
+               std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+                auto* ctrl = sActiveController;
+                if (call.method_name() == "setParameter" && ctrl) {
                     const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
                     if (!args) {
                         result->Error("INVALID_ARGUMENTS", "Expected map arguments");
@@ -259,23 +304,23 @@ private:
                         } else if (std::holds_alternative<int64_t>(valIt->second)) {
                             val = static_cast<double>(std::get<int64_t>(valIt->second));
                         }
-                        weakCtrl->beginEdit(pid);
-                        weakCtrl->setParamNormalized(pid, val);
-                        weakCtrl->performEdit(pid, val);
-                        weakCtrl->endEdit(pid);
+                        ctrl->beginEdit(pid);
+                        ctrl->setParamNormalized(pid, val);
+                        ctrl->performEdit(pid, val);
+                        ctrl->endEdit(pid);
                         result->Success(flutter::EncodableValue(true));
                     } else {
                         result->Error("MISSING_PARAM", "id or value missing");
                     }
                 } else if (call.method_name() == "getInitialParameters") {
                     flutter::EncodableMap map;
-                    if (weakCtrl) {
-                        int count = weakCtrl->getParameterCount();
+                    if (ctrl) {
+                        int count = ctrl->getParameterCount();
                         for (int i = 0; i < count; ++i) {
                             Steinberg::Vst::ParameterInfo info{};
-                            if (weakCtrl->getParameterInfo(i, info) == Steinberg::kResultTrue) {
+                            if (ctrl->getParameterInfo(i, info) == Steinberg::kResultTrue) {
                                 map[flutter::EncodableValue(static_cast<int64_t>(info.id))] =
-                                    flutter::EncodableValue(weakCtrl->getParamNormalized(info.id));
+                                    flutter::EncodableValue(ctrl->getParamNormalized(info.id));
                             }
                         }
                     }
