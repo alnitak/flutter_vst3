@@ -928,6 +928,7 @@ class LinuxNativeEditorHost {
 public:
     GtkWidget* plug{nullptr};
     GtkWidget* mainBox{nullptr};
+    GtkCssProvider* cssProvider{nullptr};
     Steinberg::Vst::EditController* controller{nullptr};
     std::string pluginName;
     std::vector<LinuxNativeParamRow> rows;
@@ -957,26 +958,29 @@ public:
         if (!plug) return;
 
         gtk_widget_set_size_request(plug, width, height);
+        gtk_style_context_add_class(gtk_widget_get_style_context(plug), "vst3-native-editor");
 
-        GtkCssProvider* provider = gtk_css_provider_new();
-        const char* css =
-            "window, plug, box { background-color: #17171c; color: #e6e6eb; }"
-            "label.plugin-title { font-size: 16pt; font-weight: bold; color: #ffffff; }"
-            "label.plugin-sub { font-size: 10pt; color: #888899; }"
-            "label.param-name { font-size: 11pt; font-weight: 600; color: #e6e6eb; }"
-            "label.param-val { font-size: 11pt; font-weight: bold; color: #40c0ff; font-family: monospace; }"
-            "label.footer { font-size: 9pt; color: #666677; }"
-            "scale contents trough { min-height: 4px; background-color: #2d2d37; border-radius: 2px; }"
-            "scale contents trough highlight { background-color: #40c0ff; border-radius: 2px; }"
-            "scale contents trough slider { min-width: 16px; min-height: 16px; margin: -6px; border-radius: 8px; background-color: #ffffff; }";
-        gtk_css_provider_load_from_data(provider, css, -1, nullptr);
-        gtk_style_context_add_provider_for_screen(
-            gdk_screen_get_default(),
-            GTK_STYLE_PROVIDER(provider),
-            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-        g_object_unref(provider);
+        if (!cssProvider) {
+            cssProvider = gtk_css_provider_new();
+            const char* css =
+                ".vst3-native-editor, .vst3-native-editor box { background-color: #17171c; color: #e6e6eb; }"
+                ".vst3-native-editor label.plugin-title { font-size: 16pt; font-weight: bold; color: #ffffff; }"
+                ".vst3-native-editor label.plugin-sub { font-size: 10pt; color: #888899; }"
+                ".vst3-native-editor label.param-name { font-size: 11pt; font-weight: 600; color: #e6e6eb; }"
+                ".vst3-native-editor label.param-val { font-size: 11pt; font-weight: bold; color: #40c0ff; font-family: monospace; }"
+                ".vst3-native-editor label.footer { font-size: 9pt; color: #666677; }"
+                ".vst3-native-editor scale contents trough { min-height: 4px; background-color: #2d2d37; border-radius: 2px; }"
+                ".vst3-native-editor scale contents trough highlight { background-color: #40c0ff; border-radius: 2px; }"
+                ".vst3-native-editor scale contents trough slider { min-width: 16px; min-height: 16px; margin: -6px; border-radius: 8px; background-color: #ffffff; }";
+            gtk_css_provider_load_from_data(cssProvider, css, -1, nullptr);
+            gtk_style_context_add_provider_for_screen(
+                gdk_screen_get_default(),
+                GTK_STYLE_PROVIDER(cssProvider),
+                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        }
 
         mainBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+        gtk_style_context_add_class(gtk_widget_get_style_context(mainBox), "vst3-native-editor");
         gtk_widget_set_margin_start(mainBox, 24);
         gtk_widget_set_margin_end(mainBox, 24);
         gtk_widget_set_margin_top(mainBox, 16);
@@ -1117,6 +1121,13 @@ public:
         if (idleSourceId != 0) {
             g_source_remove(idleSourceId);
             idleSourceId = 0;
+        }
+        if (cssProvider) {
+            gtk_style_context_remove_provider_for_screen(
+                gdk_screen_get_default(),
+                GTK_STYLE_PROVIDER(cssProvider));
+            g_object_unref(cssProvider);
+            cssProvider = nullptr;
         }
         if (plug) {
             gtk_widget_destroy(plug);
