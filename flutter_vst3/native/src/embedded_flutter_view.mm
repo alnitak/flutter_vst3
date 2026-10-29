@@ -141,12 +141,19 @@ public:
 
 private:
     void cleanup() {
+        if (flutterChannel_) {
+            [flutterChannel_ performSelector:sel_registerName("setMethodCallHandler:") withObject:nil];
+            flutterChannel_ = nil;
+        }
         if (flutterViewController_) {
+            id engine = [flutterViewController_ performSelector:sel_registerName("engine")];
             NSView* v = [flutterViewController_ performSelector:sel_registerName("view")];
             [v removeFromSuperview];
+            if (engine) {
+                ((void (*)(id, SEL))objc_msgSend)(engine, sel_registerName("shutDownEngine"));
+            }
             flutterViewController_ = nil;
         }
-        flutterChannel_ = nil;
         if (cocoaContainerView_) {
             [cocoaContainerView_ removeFromSuperview];
             cocoaContainerView_ = nil;
@@ -191,6 +198,25 @@ private:
         [fv setFrame:b];
         [fv setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
         [parent addSubview:fv];
+
+        id engine = [flutterViewController_ performSelector:sel_registerName("engine")];
+        BOOL isRunning = engine
+            ? ((BOOL (*)(id, SEL))objc_msgSend)(engine, sel_registerName("running"))
+            : NO;
+        if (!isRunning && [flutterViewController_ respondsToSelector:sel_registerName("launchEngine")]) {
+            isRunning = ((BOOL (*)(id, SEL))objc_msgSend)(
+                flutterViewController_, sel_registerName("launchEngine"));
+        }
+        if (!isRunning) {
+            NSLog(@"[flutter_vst3] FlutterEngine failed to launch (e.g. Dart SDK hash mismatch). Falling back to Cocoa.");
+            [fv removeFromSuperview];
+            if (flutterChannel_) {
+                [flutterChannel_ performSelector:sel_registerName("setMethodCallHandler:") withObject:nil];
+                flutterChannel_ = nil;
+            }
+            flutterViewController_ = nil;
+            return NO;
+        }
         return YES;
     }
 

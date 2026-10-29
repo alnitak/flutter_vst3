@@ -43,7 +43,9 @@
     #include <fcntl.h>
     #include <unistd.h>
     #include <sys/wait.h>
+#if defined(__linux__)
     #include <sys/prctl.h>
+#endif
     #include <signal.h>
 #endif
 
