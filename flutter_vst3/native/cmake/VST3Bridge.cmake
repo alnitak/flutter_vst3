@@ -3,6 +3,11 @@
 # This file provides common functions and setup for building VST® 3 plugins that use
 # the flutter_vst3 framework for Flutter UI and Dart audio processing integration.
 
+# Default to Release for single-config generators (Linux/macOS Makefiles & Ninja)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+endif()
+
 # Function to create a VST3 plugin using the bridge
 function(add_dart_vst3_plugin target_name dart_file)
     # Parse additional arguments
@@ -218,6 +223,16 @@ function(add_dart_vst3_plugin target_name dart_file)
         PUBLIC
             cxx_std_17
     )
+
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:/O2 /Oi /Ot /GF /Gy /fp:fast>
+        )
+    else()
+        target_compile_options(${target_name} PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:-O3 -fno-math-errno -fno-trapping-math -ffp-contract=fast>
+        )
+    endif()
 
     # Add include directories - INCLUDE generated FOLDER FOR HEADERS
     target_include_directories(${target_name}

@@ -11,16 +11,15 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 
-# Set build type and debug flags
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
+# Set build type and debug/release flags across single- and multi-config generators
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  add_compile_definitions(_DEBUG)
-else()
-  add_compile_definitions(NDEBUG RELEASE)
-endif()
+add_compile_definitions(
+  $<$<CONFIG:Debug>:_DEBUG>
+  $<$<NOT:$<CONFIG:Debug>>:NDEBUG RELEASE=1>
+)
 
 # Include the flutter_vst3 CMake helper
 include(../../flutter_vst3/native/cmake/VST3Bridge.cmake)

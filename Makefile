@@ -81,24 +81,24 @@ native: clean-native
 	@echo "Building dart_vst_host library..."
 	@if [ -d "/workspace" ]; then \
 		mkdir -p /workspace/dart_vst_host/native/build; \
-		cd /workspace/dart_vst_host/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-/workspace/vst3sdk} cmake .. && make; \
+		cd /workspace/dart_vst_host/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-/workspace/vst3sdk} cmake -DCMAKE_BUILD_TYPE=Release .. && make; \
 		cp /workspace/dart_vst_host/native/build/libdart_vst_host.* /workspace/ 2>/dev/null || true; \
 		cp /workspace/dart_vst_host/native/build/libdart_vst_host.* /workspace/dart_vst_host/ 2>/dev/null || true; \
 	else \
 		mkdir -p dart_vst_host/native/build; \
-		cd dart_vst_host/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-$(shell pwd)/vst3sdk} cmake .. && make; \
+		cd dart_vst_host/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-$(shell pwd)/vst3sdk} cmake -DCMAKE_BUILD_TYPE=Release .. && make; \
 		cp dart_vst_host/native/build/libdart_vst_host.* . 2>/dev/null || true; \
 		cp dart_vst_host/native/build/libdart_vst_host.* dart_vst_host/ 2>/dev/null || true; \
 	fi
 	@echo "Building dart_vst_graph library..."
 	@if [ -d "/workspace" ]; then \
 		mkdir -p /workspace/dart_vst_graph/native/build; \
-		cd /workspace/dart_vst_graph/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-/workspace/vst3sdk} cmake .. && make; \
+		cd /workspace/dart_vst_graph/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-/workspace/vst3sdk} cmake -DCMAKE_BUILD_TYPE=Release .. && make; \
 		cp /workspace/dart_vst_graph/native/build/libdart_vst_graph.* /workspace/ 2>/dev/null || true; \
 		cp /workspace/dart_vst_graph/native/build/libdart_vst_graph.* /workspace/dart_vst_graph/ 2>/dev/null || true; \
 	else \
 		mkdir -p dart_vst_graph/native/build; \
-		cd dart_vst_graph/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-$(shell pwd)/vst3sdk} cmake .. && make; \
+		cd dart_vst_graph/native/build && VST3_SDK_DIR=$${VST3_SDK_DIR:-$(shell pwd)/vst3sdk} cmake -DCMAKE_BUILD_TYPE=Release .. && make; \
 		cp dart_vst_graph/native/build/libdart_vst_graph.* . 2>/dev/null || true; \
 		cp dart_vst_graph/native/build/libdart_vst_graph.* dart_vst_graph/ 2>/dev/null || true; \
 	fi
@@ -110,7 +110,7 @@ plugin: native clean-plugin
 	@for plugin in vsts/*/; do \
 		if [ -f "$$plugin/CMakeLists.txt" ]; then \
 			echo "Building $$plugin"; \
-			cd "$$plugin" && mkdir -p build && cd build && cmake .. && make && cd ../../../; \
+			cd "$$plugin" && mkdir -p build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make && cd ../../../; \
 		fi; \
 	done
 
