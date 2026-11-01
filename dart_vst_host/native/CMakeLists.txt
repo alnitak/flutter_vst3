@@ -95,17 +95,27 @@ endif()
 
 target_compile_definitions(dart_vst_host PRIVATE
   DART_VST_HOST_EXPORTS
-  $<$<CONFIG:Debug>:_DEBUG DEVELOPMENT=1>
-  $<$<NOT:$<CONFIG:Debug>>:NDEBUG RELEASE=1>
+  $<$<CONFIG:Debug>:_DEBUG>
+  $<$<CONFIG:Debug>:DEVELOPMENT=1>
+  $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+  $<$<NOT:$<CONFIG:Debug>>:RELEASE=1>
 )
 
 if(MSVC)
   target_compile_options(dart_vst_host PRIVATE
-    $<$<NOT:$<CONFIG:Debug>>:/O2 /Oi /Ot /GF /Gy /fp:fast>
+    $<$<NOT:$<CONFIG:Debug>>:/O2>
+    $<$<NOT:$<CONFIG:Debug>>:/Oi>
+    $<$<NOT:$<CONFIG:Debug>>:/Ot>
+    $<$<NOT:$<CONFIG:Debug>>:/GF>
+    $<$<NOT:$<CONFIG:Debug>>:/Gy>
+    $<$<NOT:$<CONFIG:Debug>>:/fp:fast>
   )
 else()
   target_compile_options(dart_vst_host PRIVATE
-    $<$<NOT:$<CONFIG:Debug>>:-O3 -fno-math-errno -fno-trapping-math -ffp-contract=fast>
+    $<$<NOT:$<CONFIG:Debug>>:-O3>
+    $<$<NOT:$<CONFIG:Debug>>:-fno-math-errno>
+    $<$<NOT:$<CONFIG:Debug>>:-fno-trapping-math>
+    $<$<NOT:$<CONFIG:Debug>>:-ffp-contract=fast>
   )
 endif()
 

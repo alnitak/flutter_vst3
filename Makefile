@@ -22,18 +22,20 @@ reverb-vst: reverb
 # Build reverb VST® 3 without installing (explicit build-only target)
 reverb-build-only: reverb
 
+FLUTTER_BUILD_MODE ?= release
+
 # Build Flutter UI bundle for Echo
 echo-flutter:
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		echo "Building Flutter macOS bundle for Echo..."; \
-		cd vsts/echo && flutter build macos --debug; \
+		echo "Building Flutter macOS bundle for Echo ($(FLUTTER_BUILD_MODE))..."; \
+		cd vsts/echo && flutter build macos --$(FLUTTER_BUILD_MODE); \
 	elif [ "$$(uname)" = "Linux" ]; then \
-		echo "Building Flutter Linux bundle for Echo..."; \
+		echo "Building Flutter Linux bundle for Echo ($(FLUTTER_BUILD_MODE))..."; \
 		mkdir -p vsts/echo/build/native_assets/linux; \
-		cd vsts/echo && flutter build linux --debug; \
+		cd vsts/echo && flutter build linux --$(FLUTTER_BUILD_MODE); \
 	elif echo "$$(uname)" | grep -qiE "mingw|msys|cygwin"; then \
-		echo "Building Flutter Windows bundle for Echo..."; \
-		cd vsts/echo && flutter build windows --debug; \
+		echo "Building Flutter Windows bundle for Echo ($(FLUTTER_BUILD_MODE))..."; \
+		cd vsts/echo && flutter build windows --$(FLUTTER_BUILD_MODE); \
 	fi
 
 # Build the Echo VST® 3 plugin  

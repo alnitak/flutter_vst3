@@ -817,8 +817,15 @@ struct LinuxFlutterHost {
 
             std::string aotPath = modDir + "/lib/libapp.so";
             struct stat aotSt;
+            if (stat(aotPath.c_str(), &aotSt) != 0) {
+                aotPath = modDir + "/libapp.so";
+            }
             if (stat(aotPath.c_str(), &aotSt) == 0) {
+                fprintf(stderr, "[vst3_flutter] Using AOT library: %s\n", aotPath.c_str());
                 fl_dart_project_set_aot_library_path(proj, aotPath.c_str());
+            } else {
+                fprintf(stderr, "[vst3_flutter] Warning: No libapp.so found in %s/lib or %s\n",
+                        modDir.c_str(), modDir.c_str());
             }
 
             sSharedView = fl_view_new(proj);

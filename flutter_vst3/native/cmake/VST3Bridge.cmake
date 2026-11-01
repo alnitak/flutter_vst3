@@ -381,7 +381,10 @@ function(add_dart_vst3_plugin target_name dart_file)
         endif()
 
         # Copy Flutter frameworks if present
-        set(FLUTTER_MAC_FW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/macos/Build/Products/Debug/${target_name}.app/Contents/Frameworks")
+        set(FLUTTER_MAC_FW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/macos/Build/Products/Release/${target_name}.app/Contents/Frameworks")
+        if(NOT EXISTS "${FLUTTER_MAC_FW_DIR}/FlutterMacOS.framework")
+            set(FLUTTER_MAC_FW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/macos/Build/Products/Debug/${target_name}.app/Contents/Frameworks")
+        endif()
         if(EXISTS "${FLUTTER_MAC_FW_DIR}/FlutterMacOS.framework")
             list(APPEND BUNDLE_COMMANDS
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_PACKAGE_PATH}/Contents/Frameworks"
@@ -443,9 +446,9 @@ function(add_dart_vst3_plugin target_name dart_file)
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/${target_name}_processor"
             )
         endif()
-        set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/debug/bundle")
+        set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/release/bundle")
         if(NOT EXISTS "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so")
-            set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/release/bundle")
+            set(FLUTTER_LINUX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/linux/x64/debug/bundle")
         endif()
         if(EXISTS "${FLUTTER_LINUX_DIR}/lib/libflutter_linux_gtk.so")
             list(APPEND BUNDLE_COMMANDS
@@ -455,6 +458,9 @@ function(add_dart_vst3_plugin target_name dart_file)
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                         "${FLUTTER_LINUX_DIR}/data"
                         "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/data"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${FLUTTER_LINUX_DIR}/lib"
+                        "${PLUGIN_PACKAGE_PATH}/Contents/x86_64-linux/lib"
             )
         endif()
         if(BUNDLE_COMMANDS)

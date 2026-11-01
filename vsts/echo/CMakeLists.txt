@@ -18,7 +18,8 @@ endif()
 
 add_compile_definitions(
   $<$<CONFIG:Debug>:_DEBUG>
-  $<$<NOT:$<CONFIG:Debug>>:NDEBUG RELEASE=1>
+  $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+  $<$<NOT:$<CONFIG:Debug>>:RELEASE=1>
 )
 
 # Include the flutter_vst3 CMake helper
